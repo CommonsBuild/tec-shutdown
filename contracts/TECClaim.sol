@@ -12,9 +12,17 @@ interface ITokenManager {
     function token() external view returns (address);
 }
 
+enum State {
+    dormant,
+    configured,
+    active,
+    finialized
+}
+
 contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
   using SafeERC20 for IERC20;
 
+    State public state;
     ITokenManager internal tokenManager;
     IERC20[] internal redeemableTokens;
     uint64 public claimDeadline;
@@ -25,6 +33,8 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     error ErrorCannotRedeemZero();
     error ErrorClaimDeadlineNotReachedYet();
     error ErrorAddressBlocked();
+    error ErrorNotConfigured();
+    error ErrorNotActive();
 
     event Claim(address indexed user, uint256 amount);
     event ClaimRemaining(address indexed owner);
@@ -47,9 +57,30 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         tokenManager = _tokenManager;
         redeemableTokens = _redeemableTokens;
         claimDeadline = _claimDeadline;
+        state = State.configured;
+    }
+
+    function startClaim(address[] calldata from) external onlyOwner {
+        if (state != State.configured) {
+            revert ErrorNotConfigured();
+        }
+
+        for (uint i = 0; i < redeemableTokens.length; i++) {
+            for (uint j = 0; j < from.length; j++) {
+                uint256 balance = redeemableTokens[i].balanceOf(from[j]);
+                if (balance > 0) {
+                    redeemableTokens[i].safeTransferFrom(from[j], address(this), balance);
+                }
+            }
+        }
+        state = State.active;
     }
 
     function claim() external {
+        if (state != State.active) {
+            revert ErrorNotActive();
+        }
+
         if (blocklist[msg.sender]) {
             revert ErrorAddressBlocked();
         }
@@ -85,6 +116,10 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function claimRemaining() external onlyOwner {
+        if (state != State.active) {
+            revert ErrorNotActive();
+        }
+
         if (block.timestamp < claimDeadline) {
             revert ErrorClaimDeadlineNotReachedYet();
         }
@@ -92,6 +127,8 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
         for (uint256 i = 0; i < redeemableTokens.length; i++) {
             redeemableTokens[i].safeTransfer(msg.sender, redeemableTokens[i].balanceOf(address(this)));
         }
+
+        state = State.finialized;
 
         emit ClaimRemaining(msg.sender);
     }

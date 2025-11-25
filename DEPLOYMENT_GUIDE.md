@@ -59,6 +59,47 @@ The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** p
 - Owner can upgrade to new Implementation via UUPS pattern
 - The Implementation address can change, but Proxy address stays constant
 
+## Contract State Machine
+
+The TECClaim contract uses a state machine to manage the claim lifecycle:
+
+```
+┌──────────┐
+│ dormant  │  (initial state, never used in practice)
+└──────────┘
+     │
+     ▼
+┌────────────┐
+│ configured │  After initialize() is called
+└──────────┬─┘  - Contract is set up with parameters
+           │    - Redeemable tokens configured
+           │    - Cannot claim yet
+           │
+           │ startClaim() called by owner
+           │ (transfers tokens to contract)
+           ▼
+┌──────────┐
+│  active  │  Users can claim their tokens
+└──────────┬─┘  - claim() function is enabled
+           │    - Users burn TEC to receive redeemables
+           │    - Owner can block/unblock addresses
+           │
+           │ claimRemaining() called after deadline
+           │
+           ▼
+┌────────────┐
+│ finialized │  Claim period ended
+└────────────┘  - Owner claimed remaining tokens
+                - No more claims possible
+```
+
+**State Transitions:**
+1. **dormant → configured**: Happens during `initialize()` (deployment)
+2. **configured → active**: Owner calls `startClaim()` to transfer redeemable tokens and enable claiming
+3. **active → finialized**: Owner calls `claimRemaining()` after deadline to collect unclaimed tokens
+
+**Important**: The `startClaim()` function must be called by the owner after deployment to activate claiming. This allows the owner to coordinate the transfer of redeemable tokens from multiple sources before users can start claiming.
+
 ## Local Deployment (Testing with Forked Optimism)
 
 The local deployment uses a forked Optimism network, allowing you to test with real Optimism mainnet state.
@@ -154,9 +195,44 @@ TECClaimModule#TECClaim_Proxy - 0x...
 TECClaimModule#TECClaim - 0x...
 ```
 
-### Step 6: Fund the Contract
+### Step 6: Fund the Contract and Start Claiming
 
-Transfer redeemable tokens to the deployed proxy address. Since you're using a forked network, you can impersonate accounts that hold these tokens.
+After deployment, the contract is in the `configured` state. You need to transfer redeemable tokens and activate claiming:
+
+**Option A: Manual Transfer + startClaim()**
+
+If you want to use `startClaim()` to pull tokens from multiple sources:
+
+```bash
+# First, identify addresses that hold the redeemable tokens
+# For example: DAO treasury, multisig wallets, etc.
+
+# Then call startClaim with those addresses
+# This requires those addresses to have approved the contract first
+# The function will automatically pull all redeemableTokens from the specified addresses
+```
+
+**Option B: Direct Transfer (Simple)**
+
+You can also simply transfer tokens directly to the contract and then call `startClaim()` with an empty array:
+
+```solidity
+// Transfer tokens to contract address
+dai.transfer(proxyAddress, DAI_AMOUNT);
+reth.transfer(proxyAddress, RETH_AMOUNT);
+
+// Activate claiming (with empty array since tokens are already in contract)
+claim.startClaim([]);
+```
+
+Since you're using a forked network, you can impersonate accounts that hold these tokens.
+
+**Verify State Transition:**
+
+```bash
+# Check state (should be 2 for "active")
+cast call $PROXY_ADDRESS "state()(uint8)" --rpc-url http://127.0.0.1:8545
+```
 
 ## Optimism Mainnet Deployment
 
@@ -239,14 +315,56 @@ npx hardhat ignition verify <deployment-id>
 
 The deployment ID will be shown after successful deployment. Verification will make the contract readable on https://optimistic.etherscan.io
 
-### Step 7: Fund the Contract
+### Step 7: Fund the Contract and Activate Claims
+
+After deployment, the contract is in the `configured` state. You must activate it before users can claim:
+
+**Step 7a: Transfer Redeemable Tokens**
 
 Transfer the required amounts of redeemable tokens to the proxy address:
 
 ```bash
-# Use your preferred method (Optimistic Etherscan, script, or wallet)
-# Transfer required DAI amount to proxy address
-# Transfer required RETH amount to proxy address
+# Option 1: If tokens are in a single address
+# Simply transfer to the proxy address using your wallet or Optimistic Etherscan
+
+# Option 2: If tokens are spread across multiple addresses
+# Prepare those addresses to approve the contract
+```
+
+**Step 7b: Call startClaim() to Activate**
+
+The owner must call `startClaim()` to transition from `configured` to `active` state:
+
+```solidity
+// If tokens are already in the contract (transferred manually):
+claim.startClaim([]);
+
+// If tokens need to be pulled from multiple addresses:
+address[] memory holders = [treasuryAddress, multisigAddress];
+claim.startClaim(holders);
+// Note: holders must approve the contract first
+// The function will pull all redeemableTokens from the specified holders
+```
+
+Using cast (Foundry):
+```bash
+# If tokens already transferred to contract:
+cast send $PROXY_ADDRESS "startClaim(address[])" "[]" \
+  --rpc-url $OPTIMISM_RPC \
+  --private-key $OWNER_KEY
+
+# To pull from multiple sources (example with 2 addresses):
+cast send $PROXY_ADDRESS "startClaim(address[])" \
+  "[$TREASURY_ADDRESS,$MULTISIG_ADDRESS]" \
+  --rpc-url $OPTIMISM_RPC \
+  --private-key $OWNER_KEY
+```
+
+**Step 7c: Verify State**
+
+```bash
+# Check state (should return 2 for "active")
+cast call $PROXY_ADDRESS "state()(uint8)" --rpc-url $OPTIMISM_RPC
 ```
 
 ## Production Deployment Checklist
@@ -258,9 +376,12 @@ Transfer the required amounts of redeemable tokens to the proxy address:
 1. **Test Thoroughly**
    - Deploy and test on local forked network
    - Test all claim scenarios
+   - Test state transitions (configured → active → finialized)
+   - Test `startClaim()` function with various scenarios
    - Verify blocklist functionality
    - Test owner functions
    - Confirm deadline mechanism works
+   - Test claiming before `startClaim()` is called (should revert)
 
 2. **Verify All Parameters**
    - [ ] TokenManager address is correct for Optimism
@@ -280,15 +401,19 @@ Transfer the required amounts of redeemable tokens to the proxy address:
    - [ ] Prepare DAI transfer transaction
    - [ ] Prepare RETH transfer transaction
    - [ ] Have token approvals ready if using multisig
+   - [ ] Decide strategy for `startClaim()`: direct transfer or pull from multiple sources
 
 ### Deployment Steps
 
 1. Compile contracts: `npx hardhat compile`
 2. Deploy to Optimism: `npx hardhat ignition deploy ignition/modules/TECClaim.ts --network optimism --parameters ignition/parameters/optimism.json`
-3. Save deployment addresses
+3. Save deployment addresses (especially proxy address)
 4. Verify on Optimistic Etherscan: `npx hardhat ignition verify <deployment-id>`
-5. Transfer redeemable tokens to proxy address
-6. Test with small claim (if possible)
+5. Verify contract is in `configured` state (state should be 1)
+6. Transfer redeemable tokens to proxy address OR prepare approval if using `startClaim()` to pull tokens
+7. **Call `startClaim()` from owner address to activate claiming**
+8. Verify contract is in `active` state (state should be 2)
+9. Test with small claim (if possible)
 
 ## Post-Deployment Checklist
 
@@ -299,12 +424,92 @@ After deployment, verify:
 - [ ] Claim deadline is set correctly (`claimDeadline()` view function)
 - [ ] TokenManager address is correct
 - [ ] Redeemable tokens array is correct
+- [ ] Contract state is `configured` (1) immediately after deployment
 - [ ] All redeemable tokens are transferred to proxy contract
+- [ ] **`startClaim()` has been called by owner**
+- [ ] **Contract state is now `active` (2)**
 - [ ] Test claim with small amount (if possible)
 - [ ] Document deployment addresses in secure location
 - [ ] Update frontend/UI with new proxy contract address
-- [ ] Set up monitoring for contract events
+- [ ] Set up monitoring for contract events (especially state transitions)
 - [ ] Save deployment ID for future reference
+
+## Contract Functions Reference
+
+### State Management Functions
+
+**`startClaim(address[] from)`** - Owner only
+- **Purpose**: Activates the claim contract by transitioning from `configured` to `active` state
+- **When to use**: After deployment and funding the contract with redeemable tokens
+- **Parameters**:
+  - `from`: Array of addresses to pull tokens from (can be empty if already funded)
+- **Requirements**:
+  - Must be called by owner
+  - Contract must be in `configured` state
+  - If pulling tokens, source addresses must have approved the contract for all redeemable tokens
+- **State transition**: `configured` → `active`
+- **Behavior**: Iterates through all `redeemableTokens` configured during initialization and pulls their balances from each address in the `from` array
+
+**Example usage scenarios**:
+
+```solidity
+// Scenario 1: Tokens already transferred to contract manually
+claim.startClaim([]);
+
+// Scenario 2: Pull all redeemable tokens from a single treasury
+address[] memory sources = new address[](1);
+sources[0] = treasuryAddress;
+claim.startClaim(sources);
+
+// Scenario 3: Pull all redeemable tokens from multiple sources
+address[] memory sources = new address[](3);
+sources[0] = treasury1;
+sources[1] = treasury2;
+sources[2] = multisig;
+claim.startClaim(sources);
+// This will pull DAI and RETH (all redeemableTokens) from all 3 addresses
+```
+
+### User Functions
+
+**`claim()`**
+- **Purpose**: Users burn their TEC tokens to receive proportional redeemable tokens
+- **Requirements**:
+  - Contract must be in `active` state
+  - User must have TEC tokens
+  - User must not be blocklisted
+- **Effects**: Burns user's TEC tokens, transfers proportional DAI and RETH
+
+### Owner Functions
+
+**`claimRemaining()`** - Owner only
+- **Purpose**: After deadline, owner claims remaining unclaimed tokens
+- **Requirements**:
+  - Contract must be in `active` state
+  - Current time must be past `claimDeadline`
+- **State transition**: `active` → `finialized`
+
+**`blockAddresses(address[] users)`** - Owner only
+- **Purpose**: Prevent specific addresses from claiming
+- **Requirements**: Contract must be in `active` state
+
+**`unblockAddresses(address[] users)`** - Owner only
+- **Purpose**: Remove addresses from blocklist
+- **Requirements**: Contract must be in `active` state
+
+### View Functions
+
+**`state()(uint8)`**
+- Returns current contract state: 0=dormant, 1=configured, 2=active, 3=finialized
+
+**`claimDeadline()(uint64)`**
+- Returns Unix timestamp when claim period ends
+
+**`blocklist(address)(bool)`**
+- Returns whether an address is blocklisted
+
+**`owner()(address)`**
+- Returns contract owner address
 
 ## Getting Deployment Information
 

@@ -145,6 +145,10 @@ contract TECClaimTest is Test {
         dai.transfer(address(claim), DAI_AMOUNT);
         reth.transfer(address(claim), RETH_AMOUNT);
 
+        // Activate the claim contract (transition from configured to active)
+        address[] memory emptyAddresses = new address[](0);
+        claim.startClaim(emptyAddresses);
+
         // Distribute TEC tokens to users (tokens are in tokenManager initially)
         tokenManager.transfer(user1, 500_000e18); // ~44% of supply
         tokenManager.transfer(user2, 300_000e18); // ~26% of supply
@@ -157,6 +161,289 @@ contract TECClaimTest is Test {
         assertEq(claim.claimDeadline(), block.timestamp + CLAIM_DEADLINE);
         assertEq(dai.balanceOf(address(claim)), DAI_AMOUNT);
         assertEq(reth.balanceOf(address(claim)), RETH_AMOUNT);
+        assertEq(uint8(claim.state()), uint8(2)); // State.active (after startClaim in setUp)
+    }
+
+    function test_InitialStateIsConfiguredBeforeStart() public {
+        // Create a new claim contract and check its initial state
+        TECClaim implementation = new TECClaim();
+        IERC20[] memory redeemableTokens = new IERC20[](2);
+        redeemableTokens[0] = IERC20(address(dai));
+        redeemableTokens[1] = IERC20(address(reth));
+        
+        bytes memory initData = abi.encodeWithSelector(
+            TECClaim.initialize.selector,
+            owner,
+            ITokenManager(address(tokenManager)),
+            redeemableTokens,
+            uint64(block.timestamp + CLAIM_DEADLINE)
+        );
+        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        TECClaim newClaim = TECClaim(address(proxy));
+        
+        // After initialization, state should be configured
+        assertEq(uint8(newClaim.state()), 1); // State.configured
+    }
+
+    function test_StartClaimTransitionsToActive() public {
+        // Create new tokens in separate addresses to transfer
+        address tokenHolder1 = address(0x101);
+        address tokenHolder2 = address(0x102);
+        
+        // Create new token instances for this test
+        MockERC20 newDai = new MockERC20("DAI", "DAI", 50_000e18);
+        MockERC20 newReth = new MockERC20("RETH", "RETH", 10e18);
+        
+        // Transfer to holders
+        newDai.transfer(tokenHolder1, 25_000e18);
+        newDai.transfer(tokenHolder2, 25_000e18);
+        newReth.transfer(tokenHolder1, 5e18);
+        newReth.transfer(tokenHolder2, 5e18);
+        
+        // Create new claim contract for this test
+        TECClaim implementation = new TECClaim();
+        IERC20[] memory redeemableTokens = new IERC20[](2);
+        redeemableTokens[0] = IERC20(address(newDai));
+        redeemableTokens[1] = IERC20(address(newReth));
+        
+        bytes memory initData = abi.encodeWithSelector(
+            TECClaim.initialize.selector,
+            owner,
+            ITokenManager(address(tokenManager)),
+            redeemableTokens,
+            uint64(block.timestamp + CLAIM_DEADLINE)
+        );
+        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        TECClaim newClaim = TECClaim(address(proxy));
+        
+        // Approve tokens for transfer
+        vm.prank(tokenHolder1);
+        newDai.approve(address(newClaim), type(uint256).max);
+        vm.prank(tokenHolder1);
+        newReth.approve(address(newClaim), type(uint256).max);
+        
+        vm.prank(tokenHolder2);
+        newDai.approve(address(newClaim), type(uint256).max);
+        vm.prank(tokenHolder2);
+        newReth.approve(address(newClaim), type(uint256).max);
+        
+        // Prepare startClaim parameters
+        address[] memory holders = new address[](2);
+        holders[0] = tokenHolder1;
+        holders[1] = tokenHolder2;
+        
+        // State should be configured
+        assertEq(uint8(newClaim.state()), 1);
+        
+        // Call startClaim
+        newClaim.startClaim(holders);
+        
+        // State should now be active
+        assertEq(uint8(newClaim.state()), 2); // State.active
+        
+        // Verify tokens were transferred
+        assertEq(newDai.balanceOf(address(newClaim)), 50_000e18);
+        assertEq(newReth.balanceOf(address(newClaim)), 10e18);
+        assertEq(newDai.balanceOf(tokenHolder1), 0);
+        assertEq(newDai.balanceOf(tokenHolder2), 0);
+    }
+
+    function test_RevertWhen_StartClaimNotOwner() public {
+        address[] memory holders = new address[](1);
+        holders[0] = address(this);
+        
+        vm.prank(user1);
+        vm.expectRevert();
+        claim.startClaim(holders);
+    }
+
+    function test_RevertWhen_StartClaimNotConfigured() public {
+        // Create claim contract and start it
+        address tokenHolder = address(0x103);
+        MockERC20 newDai = new MockERC20("DAI", "DAI", 50_000e18);
+        newDai.transfer(tokenHolder, 50_000e18);
+        
+        TECClaim implementation = new TECClaim();
+        IERC20[] memory redeemableTokens = new IERC20[](1);
+        redeemableTokens[0] = IERC20(address(newDai));
+        
+        bytes memory initData = abi.encodeWithSelector(
+            TECClaim.initialize.selector,
+            owner,
+            ITokenManager(address(tokenManager)),
+            redeemableTokens,
+            uint64(block.timestamp + CLAIM_DEADLINE)
+        );
+        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        TECClaim newClaim = TECClaim(address(proxy));
+        
+        vm.prank(tokenHolder);
+        newDai.approve(address(newClaim), type(uint256).max);
+        
+        address[] memory holders = new address[](1);
+        holders[0] = tokenHolder;
+        
+        // Start claim once
+        newClaim.startClaim(holders);
+        assertEq(uint8(newClaim.state()), 2); // State.active
+        
+        // Try to start claim again - should revert
+        vm.expectRevert(TECClaim.ErrorNotConfigured.selector);
+        newClaim.startClaim(holders);
+    }
+
+    function test_RevertWhen_ClaimBeforeActive() public {
+        // Create a new claim contract that hasn't been started
+        TECClaim implementation = new TECClaim();
+        IERC20[] memory redeemableTokens = new IERC20[](2);
+        redeemableTokens[0] = IERC20(address(dai));
+        redeemableTokens[1] = IERC20(address(reth));
+        
+        bytes memory initData = abi.encodeWithSelector(
+            TECClaim.initialize.selector,
+            owner,
+            ITokenManager(address(tokenManager)),
+            redeemableTokens,
+            uint64(block.timestamp + CLAIM_DEADLINE)
+        );
+        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        TECClaim newClaim = TECClaim(address(proxy));
+        
+        // State should be configured
+        assertEq(uint8(newClaim.state()), 1);
+        
+        // Try to claim - should revert
+        vm.prank(user1);
+        vm.expectRevert(TECClaim.ErrorNotActive.selector);
+        newClaim.claim();
+    }
+
+    function test_ClaimRemainingTransitionsToFinalized() public {
+        // User1 claims
+        vm.prank(user1);
+        claim.claim();
+        
+        // Fast forward past deadline
+        vm.warp(block.timestamp + CLAIM_DEADLINE + 1);
+        
+        // State should be active
+        assertEq(uint8(claim.state()), 2);
+        
+        // Claim remaining
+        claim.claimRemaining();
+        
+        // State should now be finalized
+        assertEq(uint8(claim.state()), 3); // State.finialized
+    }
+
+    function test_RevertWhen_ClaimRemainingNotActive() public {
+        // Create new claim contract and don't start it
+        TECClaim implementation = new TECClaim();
+        IERC20[] memory redeemableTokens = new IERC20[](2);
+        redeemableTokens[0] = IERC20(address(dai));
+        redeemableTokens[1] = IERC20(address(reth));
+        
+        bytes memory initData = abi.encodeWithSelector(
+            TECClaim.initialize.selector,
+            owner,
+            ITokenManager(address(tokenManager)),
+            redeemableTokens,
+            uint64(block.timestamp + CLAIM_DEADLINE)
+        );
+        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        TECClaim newClaim = TECClaim(address(proxy));
+        
+        // Fast forward past deadline
+        vm.warp(block.timestamp + CLAIM_DEADLINE + 1);
+        
+        // Try to claim remaining - should revert because not active
+        vm.expectRevert(TECClaim.ErrorNotActive.selector);
+        newClaim.claimRemaining();
+    }
+
+    function test_StartClaimWithMultipleTokensAndHolders() public {
+        address holder1 = address(0x201);
+        address holder2 = address(0x202);
+        address holder3 = address(0x203);
+        
+        MockERC20 token1 = new MockERC20("Token1", "TK1", 300e18);
+        MockERC20 token2 = new MockERC20("Token2", "TK2", 600e18);
+        MockERC20 token3 = new MockERC20("Token3", "TK3", 900e18);
+        
+        // Distribute tokens to holders
+        token1.transfer(holder1, 100e18);
+        token1.transfer(holder2, 100e18);
+        token1.transfer(holder3, 100e18);
+        
+        token2.transfer(holder1, 200e18);
+        token2.transfer(holder2, 200e18);
+        token2.transfer(holder3, 200e18);
+        
+        token3.transfer(holder1, 300e18);
+        token3.transfer(holder2, 300e18);
+        token3.transfer(holder3, 300e18);
+        
+        // Create new claim contract
+        TECClaim implementation = new TECClaim();
+        IERC20[] memory redeemableTokens = new IERC20[](3);
+        redeemableTokens[0] = IERC20(address(token1));
+        redeemableTokens[1] = IERC20(address(token2));
+        redeemableTokens[2] = IERC20(address(token3));
+        
+        bytes memory initData = abi.encodeWithSelector(
+            TECClaim.initialize.selector,
+            owner,
+            ITokenManager(address(tokenManager)),
+            redeemableTokens,
+            uint64(block.timestamp + CLAIM_DEADLINE)
+        );
+        
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
+        TECClaim newClaim = TECClaim(address(proxy));
+        
+        // Approve all tokens
+        vm.prank(holder1);
+        token1.approve(address(newClaim), type(uint256).max);
+        vm.prank(holder1);
+        token2.approve(address(newClaim), type(uint256).max);
+        vm.prank(holder1);
+        token3.approve(address(newClaim), type(uint256).max);
+        
+        vm.prank(holder2);
+        token1.approve(address(newClaim), type(uint256).max);
+        vm.prank(holder2);
+        token2.approve(address(newClaim), type(uint256).max);
+        vm.prank(holder2);
+        token3.approve(address(newClaim), type(uint256).max);
+        
+        vm.prank(holder3);
+        token1.approve(address(newClaim), type(uint256).max);
+        vm.prank(holder3);
+        token2.approve(address(newClaim), type(uint256).max);
+        vm.prank(holder3);
+        token3.approve(address(newClaim), type(uint256).max);
+        
+        // Prepare startClaim parameters
+        address[] memory holders = new address[](3);
+        holders[0] = holder1;
+        holders[1] = holder2;
+        holders[2] = holder3;
+        
+        // Call startClaim
+        newClaim.startClaim(holders);
+        
+        // Verify all tokens were transferred
+        assertEq(token1.balanceOf(address(newClaim)), 300e18);
+        assertEq(token2.balanceOf(address(newClaim)), 600e18);
+        assertEq(token3.balanceOf(address(newClaim)), 900e18);
+        
+        // Verify state is active
+        assertEq(uint8(newClaim.state()), 2);
     }
 
     function test_ClaimProportionalDistribution() public {
@@ -393,6 +680,10 @@ contract TECClaimTest is Test {
         
         // Transfer DAI to claim contract
         newDai.transfer(address(singleTokenClaim), 50_000e18);
+
+        // Activate the claim contract
+        address[] memory emptyAddresses = new address[](0);
+        singleTokenClaim.startClaim(emptyAddresses);
 
         // Give user some TEC tokens
         address testUser = address(0x888);
