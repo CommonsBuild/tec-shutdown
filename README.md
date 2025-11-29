@@ -90,11 +90,12 @@ All 27 tests are passing ✅
 
 ```
 contracts/
-├── TECClaim.sol       # Main claim contract (UUPS upgradeable)
-└── TECClaim.t.sol     # Comprehensive test suite
+├── TECClaim.sol          # Main claim contract (UUPS upgradeable)
+├── TECClaimFactory.sol   # Factory for creating TECClaim proxies
+└── TECClaim.t.sol        # Comprehensive test suite
 
 ignition/
-└── modules/           # Hardhat Ignition deployment modules
+└── modules/              # Hardhat Ignition deployment modules
 ```
 
 ## Development
@@ -118,12 +119,13 @@ The contract is configured with:
 
 To deploy the TECClaim contract, you'll need to:
 
-1. Deploy the implementation contract
-2. Deploy the ERC1967Proxy with initialization data
-3. Transfer redeemable tokens (DAI, RETH, etc.) to the proxy address
-4. Set the claim deadline appropriately
+1. Deploy the implementation contract (TECClaim)
+2. Deploy the factory contract (TECClaimFactory) with the implementation address
+3. Use the factory to create a proxy with initialization parameters
+4. Transfer redeemable tokens (DAI, RETH, etc.) to the proxy address
+5. Call `startClaim()` to activate claiming
 
-Example deployment flow is demonstrated in the test suite setup.
+Example deployment flow is demonstrated in the ignition module and test suite setup.
 
 ## License
 

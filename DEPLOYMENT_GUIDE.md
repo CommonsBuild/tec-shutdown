@@ -11,35 +11,34 @@ Before deploying, ensure you have:
    - DAI token address
    - RETH token address (or other redeemable tokens)
 
-2. **Deployment Parameters:**
+3. **Deployment Parameters:**
    - Claim deadline (Unix timestamp in seconds)
    - Owner address (who will control the contract)
 
-3. **Funded Account:**
+4. **Funded Account:**
    - Private key with sufficient ETH for gas fees
    - Recommended: 0.01 ETH for Optimism, more for Ethereum mainnet
 
-4. **Proxy Wrapper Contract:**
-   - The `contracts/Proxy.sol` file is required for Ignition to deploy ERC1967Proxy
-   - This wrapper extends OpenZeppelin's ERC1967Proxy to generate the necessary artifacts
-   - Hardhat only generates artifacts for contracts in your `contracts/` directory, not from `node_modules`
-
 ## Architecture Overview
 
-The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** pattern:
+The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** pattern with a factory for deployment:
 
 ```
 ┌─────────────────────────────────────┐
-│  Users interact with Proxy Address  │
+│   TECClaimFactory                    │
+│  (contracts/TECClaimFactory.sol)     │
+│  - Deploys ERC1967Proxy instances    │
+│  - Configured with implementation    │
+│  - Simplifies deployment             │
 └──────────────┬──────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────┐
 │         Proxy Contract               │
-│  (contracts/Proxy.sol)               │
-│  Extends ERC1967Proxy                │
+│  (ERC1967Proxy)                      │
 │  - Stores contract state             │
 │  - Delegates calls to implementation │
+│  - Created by TECClaimFactory        │
 └──────────────┬──────────────────────┘
                │
                ▼
@@ -68,6 +67,7 @@ The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** p
 - State is stored in the Proxy, not the Implementation
 - Owner can upgrade to new Implementation via UUPS pattern
 - The Implementation address can change, but Proxy address stays constant
+- **TECClaimFactory simplifies proxy creation** by encapsulating initialization
 - **A non-transferable snapshot is automatically created on deployment** from the source TEC token
 - The snapshot is frozen at the deployment block number
 
@@ -117,25 +117,7 @@ The TECClaim contract uses a state machine to manage the claim lifecycle:
 
 The local deployment uses a forked Optimism network, allowing you to test with real Optimism mainnet state.
 
-### Step 1: Ensure Proxy Wrapper Exists
-
-Verify that `contracts/Proxy.sol` exists with the following content:
-
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
-
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
-// This contract re-exports ERC1967Proxy to make it available to Hardhat Ignition
-contract Proxy is ERC1967Proxy {
-    constructor(address implementation, bytes memory _data)
-        ERC1967Proxy(implementation, _data)
-    {}
-}
-```
-
-### Step 2: Start Local Forked Node
+### Step 1: Start Local Forked Node
 
 The configuration in `hardhat.config.ts` includes a `local` network that forks Optimism:
 
@@ -146,7 +128,7 @@ npx hardhat node --network local
 
 This will start a local node on `http://127.0.0.1:8545` with forked Optimism state.
 
-### Step 3: Update Parameters
+### Step 2: Update Parameters
 
 Edit `ignition/parameters/local.json` with your deployment parameters. Example:
 
@@ -167,15 +149,15 @@ Edit `ignition/parameters/local.json` with your deployment parameters. Example:
 - A non-transferable snapshot will be automatically created at deployment
 - The snapshot will be frozen at the current block number
 
-### Step 4: Compile Contracts
+### Step 3: Compile Contracts
 
 ```bash
 npx hardhat compile
 ```
 
-This generates artifacts for TECClaim and the Proxy wrapper.
+This generates artifacts for TECClaim and TECClaimFactory.
 
-### Step 5: Deploy TECClaim
+### Step 4: Deploy TECClaim
 
 In a new terminal:
 
@@ -196,10 +178,10 @@ Batch #1
   Executed TECClaimModule#TECClaim_Implementation
 
 Batch #2
-  Executed TECClaimModule#encodeFunctionCall(...)
+  Executed TECClaimModule#TECClaimFactory
 
 Batch #3
-  Executed TECClaimModule#TECClaim_Proxy
+  Executed TECClaimModule#TECClaim_Proxy_Creation
 
 Batch #4
   Executed TECClaimModule#TECClaim
@@ -209,11 +191,12 @@ Batch #4
 Deployed Addresses
 
 TECClaimModule#TECClaim_Implementation - 0x...
-TECClaimModule#TECClaim_Proxy - 0x...
-TECClaimModule#TECClaim - 0x...
+TECClaimModule#TECClaimFactory - 0x...
+TECClaimModule#TECClaim_Proxy_Creation - 0x... (proxy address)
+TECClaimModule#TECClaim - 0x... (proxy address)
 ```
 
-### Step 6: Fund the Contract and Start Claiming
+### Step 5: Fund the Contract and Start Claiming
 
 After deployment, the contract is in the `configured` state. You need to transfer redeemable tokens and activate claiming:
 
@@ -595,22 +578,13 @@ export default buildModule("UpgradeTECClaimModule", (m) => {
 
 **Problem**: Hardhat Ignition cannot find the ERC1967Proxy artifact.
 
-**Solution**: Ensure `contracts/Proxy.sol` exists and extends ERC1967Proxy:
+**Solution**: This issue is resolved by using TECClaimFactory instead of directly deploying ERC1967Proxy. The factory handles proxy creation internally. Ensure `contracts/TECClaimFactory.sol` exists and is compiled:
 
-```solidity
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.28;
-
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-
-contract Proxy is ERC1967Proxy {
-    constructor(address implementation, bytes memory _data)
-        ERC1967Proxy(implementation, _data)
-    {}
-}
+```bash
+npx hardhat compile
 ```
 
-Then run `npx hardhat compile` and use `"Proxy"` in your Ignition module.
+The factory will automatically create ERC1967Proxy instances when you call the `create` function.
 
 ### Deployment Fails with Gas Issues
 

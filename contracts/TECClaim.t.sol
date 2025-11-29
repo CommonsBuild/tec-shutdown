@@ -2,8 +2,8 @@
 pragma solidity ^0.8.28;
 
 import {TECClaim, IMiniMeToken, IERC20} from "./TECClaim.sol";
+import {TECClaimFactory} from "./TECClaimFactory.sol";
 import {Test, console2} from "forge-std/Test.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 // Mock ERC20 Token (for DAI, RETH, etc.)
 contract MockERC20 {
@@ -250,22 +250,22 @@ contract TECClaimTest is Test {
         // Deploy TECClaim implementation
         TECClaim implementation = new TECClaim();
 
+        // Deploy factory with implementation address
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+
         // Prepare initialization data
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
         redeemableTokens[1] = IERC20(address(reth));
-        
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+
+        // Create proxy using factory (this creates the snapshot)
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(sourceTecToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-
-        // Deploy proxy and initialize (this creates the snapshot)
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        claim = TECClaim(address(proxy));
+        claim = TECClaim(proxyAddress);
         
         // Get reference to the snapshot token that was created
         // The contract creates the snapshot and stores it in the token variable
@@ -297,20 +297,19 @@ contract TECClaimTest is Test {
         );
         
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
         redeemableTokens[1] = IERC20(address(reth));
         
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-        
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim newClaim = TECClaim(address(proxy));
+        TECClaim newClaim = TECClaim(proxyAddress);
         
         // After initialization, state should be configured
         assertEq(uint8(newClaim.state()), 1); // State.configured
@@ -340,20 +339,19 @@ contract TECClaimTest is Test {
         
         // Create new claim contract for this test
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(newDai));
         redeemableTokens[1] = IERC20(address(newReth));
         
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-        
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim newClaim = TECClaim(address(proxy));
+        TECClaim newClaim = TECClaim(proxyAddress);
         
         // Approve tokens for transfer
         vm.prank(tokenHolder1);
@@ -405,19 +403,18 @@ contract TECClaimTest is Test {
         MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
         
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](1);
         redeemableTokens[0] = IERC20(address(newDai));
         
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-        
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim newClaim = TECClaim(address(proxy));
+        TECClaim newClaim = TECClaim(proxyAddress);
         
         vm.prank(tokenHolder);
         newDai.approve(address(newClaim), type(uint256).max);
@@ -439,20 +436,19 @@ contract TECClaimTest is Test {
         MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
         
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
         redeemableTokens[1] = IERC20(address(reth));
         
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-        
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim newClaim = TECClaim(address(proxy));
+        TECClaim newClaim = TECClaim(proxyAddress);
         
         // State should be configured
         assertEq(uint8(newClaim.state()), 1);
@@ -486,20 +482,19 @@ contract TECClaimTest is Test {
         MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
         
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
         redeemableTokens[1] = IERC20(address(reth));
         
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-        
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim newClaim = TECClaim(address(proxy));
+        TECClaim newClaim = TECClaim(proxyAddress);
         
         // Fast forward past deadline
         vm.warp(block.timestamp + CLAIM_DEADLINE + 1);
@@ -536,21 +531,20 @@ contract TECClaimTest is Test {
         
         // Create new claim contract
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](3);
         redeemableTokens[0] = IERC20(address(token1));
         redeemableTokens[1] = IERC20(address(token2));
         redeemableTokens[2] = IERC20(address(token3));
         
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-        
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim newClaim = TECClaim(address(proxy));
+        TECClaim newClaim = TECClaim(proxyAddress);
         
         // Approve all tokens
         vm.prank(holder1);
@@ -806,22 +800,21 @@ contract TECClaimTest is Test {
         
         // Create a new claim contract with only DAI
         TECClaim implementation = new TECClaim();
+        TECClaimFactory factory = new TECClaimFactory(address(implementation));
+        
         IERC20[] memory redeemableTokens = new IERC20[](1);
         
         // Create new DAI for this test
         MockERC20 newDai = new MockERC20("DAI", "DAI", 50_000e18);
         redeemableTokens[0] = IERC20(address(newDai));
 
-        bytes memory initData = abi.encodeWithSelector(
-            TECClaim.initialize.selector,
+        address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(newSourceTecToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
-
-        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
-        TECClaim singleTokenClaim = TECClaim(address(proxy));
+        TECClaim singleTokenClaim = TECClaim(proxyAddress);
         
         // Get snapshot token created by the contract
         MockMiniMeTokenClone newSnapshotToken = MockMiniMeTokenClone(address(singleTokenClaim.token()));

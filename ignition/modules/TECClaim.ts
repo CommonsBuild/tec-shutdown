@@ -27,30 +27,42 @@ export default buildModule("TECClaimModule", (m) => {
     id: "TECClaim_Implementation",
   });
 
+  // Deploy the factory contract with the implementation address
+  const factory = m.contract("TECClaimFactory", [implementation], {
+    id: "TECClaimFactory",
+  });
+
   // Prepare redeemable tokens array
   const redeemableTokens = [daiAddress, rethAddress];
 
-  // Encode the initialization data
-  const initData = m.encodeFunctionCall(implementation, "initialize", [
+  // Create proxy using factory
+  const proxyCreation = m.call(factory, "create", [
     ownerAddress,
     tecTokenAddress,
     redeemableTokens,
     claimDeadline,
-  ]);
-
-  // Deploy the proxy contract (using our Proxy wrapper which extends ERC1967Proxy)
-  const proxy = m.contract("Proxy", [implementation, initData], {
-    id: "TECClaim_Proxy",
+  ], {
+    id: "TECClaim_Proxy_Creation",
   });
 
+  // Extract the proxy address from the return value
+  const proxyAddress = m.readEventArgument(
+    proxyCreation,
+    "ProxyCreated",
+    "proxy",
+    {
+      id: "TECClaim_Proxy_Address",
+    }
+  );
+
   // Create a contract instance at the proxy address with the implementation ABI
-  const tecClaim = m.contractAt("TECClaim", proxy, {
+  const tecClaim = m.contractAt("TECClaim", proxyAddress, {
     id: "TECClaim",
   });
 
   return { 
     implementation, 
-    proxy, 
+    factory,
     tecClaim 
   };
 });
