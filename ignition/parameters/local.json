@@ -1,6 +1,6 @@
 {
     "TECClaimModule": {
-      "tokenManagerAddress": "0x19b5b7887216ae05db3921b87d875e2ccdb7ae2c",
+      "tecTokenAddress": "0x8fc7c1109c08904160d6ae36482b79814d45eb78",
       "daiAddress": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
       "rethAddress": "0x9Bcef72be871e61ED4fBbc7630889beE758eb81D",
       "claimDeadline": "1779726356",

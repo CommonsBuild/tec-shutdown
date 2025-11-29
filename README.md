@@ -4,12 +4,16 @@ This project contains the TECClaim smart contract, an upgradeable contract that 
 
 ## Project Overview
 
-The TECClaim contract enables TEC token holders to burn their tokens in exchange for a proportional share of redeemable tokens (DAI, RETH, etc.) held in the contract. The contract uses the UUPS upgradeable proxy pattern and includes features for address blocking and owner withdrawal after a deadline.
+The TECClaim contract enables TEC token holders to burn their snapshot tokens in exchange for a proportional share of redeemable tokens (DAI, RETH, etc.) held in the contract. The contract uses the UUPS upgradeable proxy pattern and includes features for address blocking and owner withdrawal after a deadline.
+
+The contract uses a **non-transferable snapshot** of the TEC token, created at deployment time using MiniMe's `createCloneToken` functionality. This snapshot is frozen at a specific block height and cannot be transferred, making it perfect for claim tracking.
 
 ### Key Features
 
-- **Proportional Claims**: Users can claim their proportional share of treasury assets based on their TEC token holdings
-- **Token Burning**: TEC tokens are burned upon claiming to prevent double-claims
+- **Non-Transferable Snapshot**: Creates a frozen snapshot of TEC token balances at deployment
+- **Proportional Claims**: Users can claim their proportional share of treasury assets based on their snapshot token holdings
+- **Token Burning**: Snapshot tokens are burned upon claiming to prevent double-claims
+- **MiniMe Token Integration**: Uses MiniMe's clone token functionality for secure snapshots
 - **Blocklist**: Contract owner can block/unblock specific addresses from claiming
 - **Deadline Mechanism**: After the claim deadline, the owner can withdraw any remaining unclaimed tokens
 - **Upgradeable**: Uses UUPS proxy pattern for upgradeability
@@ -51,13 +55,14 @@ bunx hardhat test contracts/TECClaim.t.sol
 
 ### Test Coverage
 
-The test suite includes 19 comprehensive tests covering:
+The test suite includes 27 comprehensive tests covering:
 
 - ✅ **Basic Functionality**
-  - Contract initialization
+  - Contract initialization with snapshot token creation
   - Proportional token distribution
   - Multiple users claiming
   - Event emissions
+  - Snapshot token burning
 
 - ✅ **Error Cases**
   - Claiming with zero balance
@@ -79,7 +84,7 @@ The test suite includes 19 comprehensive tests covering:
   - Partial claims
   - Distribution accuracy
 
-All 19 tests are passing ✅
+All 27 tests are passing ✅
 
 ## Project Structure
 

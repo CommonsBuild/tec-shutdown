@@ -7,9 +7,16 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
-interface ITokenManager {
-    function burn(address account, uint256 amount) external;
-    function token() external view returns (address);
+interface IMiniMeToken is IERC20 {
+    function controller() external returns(address);
+    function destroyTokens(address _owner, uint _amount) external returns (bool);
+    function createCloneToken(
+        string memory _cloneTokenName,
+        uint8 _cloneDecimalUnits,
+        string memory _cloneTokenSymbol,
+        uint _snapshotBlock,
+        bool _transfersEnabled
+    ) external returns(IMiniMeToken);
 }
 
 enum State {
@@ -23,9 +30,9 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
   using SafeERC20 for IERC20;
 
     State public state;
-    ITokenManager internal tokenManager;
-    IERC20[] internal redeemableTokens;
+    IMiniMeToken public token;
     uint64 public claimDeadline;
+    IERC20[] public redeemableTokens;
     mapping(address => bool) public blocklist;
 
     error ErrorCannotBurnZero();
@@ -35,6 +42,7 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     error ErrorAddressBlocked();
     error ErrorNotConfigured();
     error ErrorNotActive();
+    error ErrorAlreadyActive();
 
     event Claim(address indexed user, uint256 amount);
     event ClaimRemaining(address indexed owner);
@@ -48,16 +56,24 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
 
     function initialize(
         address initialOwner,
-        ITokenManager _tokenManager,
+        IMiniMeToken _token,
         IERC20[] memory _redeemableTokens,
         uint64 _claimDeadline
     ) public initializer {
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
-        tokenManager = _tokenManager;
+        token = _token.createCloneToken("TEC Shutdown Snapshot", 18, "TECSNAP", block.number, false);
         redeemableTokens = _redeemableTokens;
         claimDeadline = _claimDeadline;
         state = State.configured;
+    }
+
+    function burn(address _owner, uint256 _amount) external onlyOwner {
+        if (state != State.configured) {
+            revert ErrorAlreadyActive();
+        }
+
+        token.destroyTokens(_owner, _amount);
     }
 
     function startClaim(address[] calldata from) external onlyOwner {
@@ -85,8 +101,8 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             revert ErrorAddressBlocked();
         }
 
-        uint256 burnableAmount = IERC20(tokenManager.token()).balanceOf(msg.sender);
-        uint256 burnableTokenTotalSupply = IERC20(tokenManager.token()).totalSupply();
+        uint256 burnableAmount = token.balanceOf(msg.sender);
+        uint256 burnableTokenTotalSupply = token.totalSupply();
         uint256 redemptionAmount;
         uint256 totalRedemptionAmount;
         uint256 vaultTokenBalance;
@@ -110,7 +126,7 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
             revert ErrorCannotRedeemZero();
         }
 
-        tokenManager.burn(msg.sender, burnableAmount);
+        token.destroyTokens(msg.sender, burnableAmount);
 
         emit Claim(msg.sender, burnableAmount);
     }

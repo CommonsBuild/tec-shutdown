@@ -7,7 +7,7 @@ This guide provides step-by-step instructions for deploying the TECClaim contrac
 Before deploying, ensure you have:
 
 1. **Required Contract Addresses:**
-   - TokenManager contract address (manages TEC tokens)
+   - TEC MiniMe Token address (the source token to create a snapshot from)
    - DAI token address
    - RETH token address (or other redeemable tokens)
 
@@ -49,6 +49,16 @@ The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** p
 │  - Contains business logic           │
 │  - Upgradeable by owner              │
 │  - UUPS upgrade mechanism            │
+│  - Creates snapshot token on init    │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────┐
+│   Non-Transferable Snapshot Token   │
+│  - Created via createCloneToken()    │
+│  - Frozen at deployment block        │
+│  - Transfers disabled                │
+│  - TECClaim is controller            │
 └─────────────────────────────────────┘
 ```
 
@@ -58,6 +68,8 @@ The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** p
 - State is stored in the Proxy, not the Implementation
 - Owner can upgrade to new Implementation via UUPS pattern
 - The Implementation address can change, but Proxy address stays constant
+- **A non-transferable snapshot is automatically created on deployment** from the source TEC token
+- The snapshot is frozen at the deployment block number
 
 ## Contract State Machine
 
@@ -72,6 +84,7 @@ The TECClaim contract uses a state machine to manage the claim lifecycle:
 ┌────────────┐
 │ configured │  After initialize() is called
 └──────────┬─┘  - Contract is set up with parameters
+           │    - Snapshot token created (non-transferable)
            │    - Redeemable tokens configured
            │    - Cannot claim yet
            │
@@ -81,7 +94,7 @@ The TECClaim contract uses a state machine to manage the claim lifecycle:
 ┌──────────┐
 │  active  │  Users can claim their tokens
 └──────────┬─┘  - claim() function is enabled
-           │    - Users burn TEC to receive redeemables
+           │    - Users burn snapshot tokens to receive redeemables
            │    - Owner can block/unblock addresses
            │
            │ claimRemaining() called after deadline
@@ -94,7 +107,7 @@ The TECClaim contract uses a state machine to manage the claim lifecycle:
 ```
 
 **State Transitions:**
-1. **dormant → configured**: Happens during `initialize()` (deployment)
+1. **dormant → configured**: Happens during `initialize()` (deployment) - automatically creates snapshot token
 2. **configured → active**: Owner calls `startClaim()` to transfer redeemable tokens and enable claiming
 3. **active → finialized**: Owner calls `claimRemaining()` after deadline to collect unclaimed tokens
 
@@ -140,7 +153,7 @@ Edit `ignition/parameters/local.json` with your deployment parameters. Example:
 ```json
 {
   "TECClaimModule": {
-    "tokenManagerAddress": "0x19b5b7887216ae05db3921b87d875e2ccdb7ae2c",
+    "tecTokenAddress": "0x8fc7c1109c08904160d6ae36482b79814d45eb78",
     "daiAddress": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
     "rethAddress": "0x9Bcef72be871e61ED4fBbc7630889beE758eb81D",
     "claimDeadline": "1779726356",
@@ -148,6 +161,11 @@ Edit `ignition/parameters/local.json` with your deployment parameters. Example:
   }
 }
 ```
+
+**Important Notes:**
+- `tecTokenAddress`: The source MiniMe token address to create a snapshot from
+- A non-transferable snapshot will be automatically created at deployment
+- The snapshot will be frozen at the current block number
 
 ### Step 4: Compile Contracts
 
@@ -198,6 +216,8 @@ TECClaimModule#TECClaim - 0x...
 ### Step 6: Fund the Contract and Start Claiming
 
 After deployment, the contract is in the `configured` state. You need to transfer redeemable tokens and activate claiming:
+
+**Option A: Manual Transfer + startClaim()**
 
 **Option A: Manual Transfer + startClaim()**
 
@@ -277,17 +297,17 @@ The `ignition/parameters/optimism.json` file contains deployment parameters:
 ```json
 {
   "TECClaimModule": {
-    "tokenManagerAddress": "0x19b5b7887216ae05db3921b87d875e2ccdb7ae2c",
+    "tecTokenAddress": "0x8fc7c1109c08904160d6ae36482b79814d45eb78",
     "daiAddress": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
     "rethAddress": "0x9Bcef72be871e61ED4fBbc7630889beE758eb81D",
-    "claimDeadline": "1779726356",  // Update to your deadline
-    "ownerAddress": "0x4D9339dd97db55e3B9bCBE65dE39fF9c04d1C2cd"  // Update to your owner
+    "claimDeadline": "1779726356",
+    "ownerAddress": "0x4D9339dd97db55e3B9bCBE65dE39fF9c04d1C2cd"
   }
 }
 ```
 
 **Important**: Verify these addresses:
-- TokenManager: The TEC token manager on Optimism
+- TEC Token (MiniMe): The source TEC token address on Optimism to create snapshot from
 - DAI: `0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1` (Optimism DAI)
 - RETH: `0x9Bcef72be871e61ED4fBbc7630889beE758eb81D` (Optimism RETH)
 
@@ -378,13 +398,14 @@ cast call $PROXY_ADDRESS "state()(uint8)" --rpc-url $OPTIMISM_RPC
    - Test all claim scenarios
    - Test state transitions (configured → active → finialized)
    - Test `startClaim()` function with various scenarios
+   - Test snapshot token creation
    - Verify blocklist functionality
    - Test owner functions
    - Confirm deadline mechanism works
    - Test claiming before `startClaim()` is called (should revert)
 
 2. **Verify All Parameters**
-   - [ ] TokenManager address is correct for Optimism
+   - [ ] TEC Token (MiniMe) source address is correct for Optimism
    - [ ] DAI address: `0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1`
    - [ ] RETH address: `0x9Bcef72be871e61ED4fBbc7630889beE758eb81D`
    - [ ] Claim deadline is set correctly (Unix timestamp)
@@ -410,10 +431,12 @@ cast call $PROXY_ADDRESS "state()(uint8)" --rpc-url $OPTIMISM_RPC
 3. Save deployment addresses (especially proxy address)
 4. Verify on Optimistic Etherscan: `npx hardhat ignition verify <deployment-id>`
 5. Verify contract is in `configured` state (state should be 1)
-6. Transfer redeemable tokens to proxy address OR prepare approval if using `startClaim()` to pull tokens
-7. **Call `startClaim()` from owner address to activate claiming**
-8. Verify contract is in `active` state (state should be 2)
-9. Test with small claim (if possible)
+6. **Set TECClaim as controller of TEC token** (from current controller address)
+7. Transfer redeemable tokens to proxy address OR prepare approval if using `startClaim()` to pull tokens
+8. **Call `startClaim()` from owner address to activate claiming**
+9. Verify contract is in `active` state (state should be 2)
+10. Verify TECClaim is the controller of the TEC token
+11. Test with small claim (if possible)
 
 ## Post-Deployment Checklist
 
@@ -422,7 +445,8 @@ After deployment, verify:
 - [ ] Contract is verified on Optimistic Etherscan
 - [ ] Owner address is correct (`owner()` view function)
 - [ ] Claim deadline is set correctly (`claimDeadline()` view function)
-- [ ] TokenManager address is correct
+- [ ] Source TEC Token address is correct
+- [ ] Snapshot token was created successfully at deployment
 - [ ] Redeemable tokens array is correct
 - [ ] Contract state is `configured` (1) immediately after deployment
 - [ ] All redeemable tokens are transferred to proxy contract

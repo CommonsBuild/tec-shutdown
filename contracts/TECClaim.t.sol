@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.28;
 
-import {TECClaim, ITokenManager, IERC20} from "./TECClaim.sol";
+import {TECClaim, IMiniMeToken, IERC20} from "./TECClaim.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
-// Mock ERC20 Token
+// Mock ERC20 Token (for DAI, RETH, etc.)
 contract MockERC20 {
     string public name;
     string public symbol;
@@ -63,39 +63,155 @@ contract MockERC20 {
     }
 }
 
-// Mock Token Manager
-contract MockTokenManager is ITokenManager {
-    MockERC20 public tecToken;
-    address public owner;
+// Mock MiniMe Token (simplified version for testing)
+contract MockMiniMeToken {
+    string public name;
+    string public symbol;
+    uint8 public decimals = 18;
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    address public controller;
 
-    constructor(uint256 initialSupply) {
-        owner = msg.sender;
-        tecToken = new MockERC20("Token Engineering Commons", "TEC", initialSupply);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event CloneTokenCreated(address indexed clone);
+
+    constructor(string memory _name, string memory _symbol, uint256 _totalSupply) {
+        name = _name;
+        symbol = _symbol;
+        totalSupply = _totalSupply;
+        balanceOf[msg.sender] = _totalSupply;
+        controller = msg.sender;
+        emit Transfer(address(0), msg.sender, _totalSupply);
     }
 
-    function burn(address account, uint256 amount) external override {
-        tecToken.burn(account, amount);
+    function transfer(address to, uint256 amount) public returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+        return true;
     }
 
-    function token() external view override returns (address) {
-        return address(tecToken);
+    function destroyTokens(address _owner, uint256 _amount) external returns (bool) {
+        require(msg.sender == controller, "Only controller can destroy tokens");
+        require(balanceOf[_owner] >= _amount, "Insufficient balance");
+        balanceOf[_owner] -= _amount;
+        totalSupply -= _amount;
+        emit Transfer(_owner, address(0), _amount);
+        return true;
+    }
+
+    function createCloneToken(
+        string memory _cloneTokenName,
+        uint8 /* _cloneDecimalUnits */,
+        string memory _cloneTokenSymbol,
+        uint256 /* _snapshotBlock */,
+        bool /* _transfersEnabled */
+    ) external returns (IMiniMeToken) {
+        MockMiniMeTokenClone clone = new MockMiniMeTokenClone(
+            _cloneTokenName,
+            _cloneTokenSymbol,
+            address(this)
+        );
+        clone.setController(msg.sender);
+        
+        // Copy current totalSupply
+        clone.setTotalSupply(totalSupply);
+        
+        // Copy all existing balances to the clone
+        // This happens implicitly through the snapshot mechanism
+        // We use the parent field to track where balances come from
+        
+        emit CloneTokenCreated(address(clone));
+        return IMiniMeToken(address(clone));
+    }
+
+    function copyBalanceToClone(address clone, address holder) external {
+        MockMiniMeTokenClone(clone).mint(holder, balanceOf[holder]);
+    }
+}
+
+// Mock MiniMe Token Clone (simplified version for testing)
+contract MockMiniMeTokenClone {
+    string public name;
+    string public symbol;
+    uint8 public decimals = 18;
+    uint256 public totalSupply;
+    mapping(address => uint256) private _balanceOverrides;
+    mapping(address => bool) private _hasBalanceOverride;
+    address public controller;
+    address public parentToken;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    constructor(string memory _name, string memory _symbol, address _parentToken) {
+        name = _name;
+        symbol = _symbol;
+        parentToken = _parentToken;
+    }
+
+    function setController(address _controller) external {
+        controller = _controller;
+    }
+
+    function setTotalSupply(uint256 _totalSupply) external {
+        totalSupply = _totalSupply;
+    }
+
+    function balanceOf(address _owner) public view returns (uint256) {
+        // If balance was overridden (burned or minted), use override
+        if (_hasBalanceOverride[_owner]) {
+            return _balanceOverrides[_owner];
+        }
+        // Otherwise, query parent token
+        if (parentToken != address(0)) {
+            return MockMiniMeToken(parentToken).balanceOf(_owner);
+        }
+        return 0;
     }
 
     function mint(address to, uint256 amount) external {
-        tecToken.mint(to, amount);
+        totalSupply += amount;
+        _balanceOverrides[to] = balanceOf(to) + amount;
+        _hasBalanceOverride[to] = true;
+        emit Transfer(address(0), to, amount);
     }
 
-    function transfer(address to, uint256 amount) external {
-        tecToken.transfer(to, amount);
+    function destroyTokens(address _owner, uint256 _amount) external returns (bool) {
+        require(msg.sender == controller, "Only controller can destroy tokens");
+        uint256 currentBalance = balanceOf(_owner);
+        require(currentBalance >= _amount, "Insufficient balance");
+        
+        _balanceOverrides[_owner] = currentBalance - _amount;
+        _hasBalanceOverride[_owner] = true;
+        totalSupply -= _amount;
+        
+        emit Transfer(_owner, address(0), _amount);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        uint256 senderBalance = balanceOf(msg.sender);
+        require(senderBalance >= amount, "Insufficient balance");
+        
+        _balanceOverrides[msg.sender] = senderBalance - amount;
+        _hasBalanceOverride[msg.sender] = true;
+        
+        uint256 recipientBalance = balanceOf(to);
+        _balanceOverrides[to] = recipientBalance + amount;
+        _hasBalanceOverride[to] = true;
+        
+        emit Transfer(msg.sender, to, amount);
+        return true;
     }
 }
 
 contract TECClaimTest is Test {
     TECClaim public claim;
-    MockTokenManager public tokenManager;
+    MockMiniMeToken public sourceTecToken;      // Source token to create snapshot from
+    MockMiniMeTokenClone public snapshotToken;       // Snapshot token created by contract
     MockERC20 public dai;
     MockERC20 public reth;
-    MockERC20 public tecToken;
 
     address public owner = address(this);
     address public user1 = address(0x1);
@@ -113,13 +229,23 @@ contract TECClaimTest is Test {
     event AddressUnblocked(address indexed user);
 
     function setUp() public {
-        // Create mock tokens
+        // Create mock tokens for redeemables
         dai = new MockERC20("DAI Stablecoin", "DAI", DAI_AMOUNT);
         reth = new MockERC20("Rocket Pool ETH", "RETH", RETH_AMOUNT);
         
-        // Create mock token manager with TEC token
-        tokenManager = new MockTokenManager(TEC_TOTAL_SUPPLY);
-        tecToken = MockERC20(tokenManager.token());
+        // Create source MiniMe token (original TEC token with balances)
+        sourceTecToken = new MockMiniMeToken(
+            "Token Engineering Commons",
+            "TEC",
+            TEC_TOTAL_SUPPLY
+        );
+        
+        // Distribute TEC tokens to users in the SOURCE token
+        // These balances will be snapshotted when the contract initializes
+        sourceTecToken.transfer(user1, 500_000e18); // ~44% of supply
+        sourceTecToken.transfer(user2, 300_000e18); // ~26% of supply
+        sourceTecToken.transfer(user3, 100_000e18); // ~8.8% of supply
+        // owner keeps 236_450e18 (~20.8% of supply)
 
         // Deploy TECClaim implementation
         TECClaim implementation = new TECClaim();
@@ -132,14 +258,18 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(sourceTecToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
 
-        // Deploy proxy and initialize
+        // Deploy proxy and initialize (this creates the snapshot)
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         claim = TECClaim(address(proxy));
+        
+        // Get reference to the snapshot token that was created
+        // The contract creates the snapshot and stores it in the token variable
+        snapshotToken = MockMiniMeTokenClone(address(claim.token()));
 
         // Transfer redeemable tokens to claim contract
         dai.transfer(address(claim), DAI_AMOUNT);
@@ -148,12 +278,6 @@ contract TECClaimTest is Test {
         // Activate the claim contract (transition from configured to active)
         address[] memory emptyAddresses = new address[](0);
         claim.startClaim(emptyAddresses);
-
-        // Distribute TEC tokens to users (tokens are in tokenManager initially)
-        tokenManager.transfer(user1, 500_000e18); // ~44% of supply
-        tokenManager.transfer(user2, 300_000e18); // ~26% of supply
-        tokenManager.transfer(user3, 100_000e18); // ~8.8% of supply
-        tokenManager.transfer(owner, 236_450e18); // ~20.8% of supply
     }
 
     function test_Initialize() public view {
@@ -165,7 +289,13 @@ contract TECClaimTest is Test {
     }
 
     function test_InitialStateIsConfiguredBeforeStart() public {
-        // Create a new claim contract and check its initial state
+        // Create a new source token and claim contract to check initial state
+        MockMiniMeToken newSourceToken = new MockMiniMeToken(
+            "TEC",
+            "TEC",
+            TEC_TOTAL_SUPPLY
+        );
+        
         TECClaim implementation = new TECClaim();
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
@@ -174,7 +304,7 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
@@ -201,6 +331,13 @@ contract TECClaimTest is Test {
         newReth.transfer(tokenHolder1, 5e18);
         newReth.transfer(tokenHolder2, 5e18);
         
+        // Create new source token for this test
+        MockMiniMeToken newSourceToken = new MockMiniMeToken(
+            "TEC",
+            "TEC",
+            1_000_000e18
+        );
+        
         // Create new claim contract for this test
         TECClaim implementation = new TECClaim();
         IERC20[] memory redeemableTokens = new IERC20[](2);
@@ -210,7 +347,7 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
@@ -265,6 +402,8 @@ contract TECClaimTest is Test {
         MockERC20 newDai = new MockERC20("DAI", "DAI", 50_000e18);
         newDai.transfer(tokenHolder, 50_000e18);
         
+        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        
         TECClaim implementation = new TECClaim();
         IERC20[] memory redeemableTokens = new IERC20[](1);
         redeemableTokens[0] = IERC20(address(newDai));
@@ -272,7 +411,7 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
@@ -297,6 +436,8 @@ contract TECClaimTest is Test {
 
     function test_RevertWhen_ClaimBeforeActive() public {
         // Create a new claim contract that hasn't been started
+        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        
         TECClaim implementation = new TECClaim();
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
@@ -305,7 +446,7 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
@@ -342,6 +483,8 @@ contract TECClaimTest is Test {
 
     function test_RevertWhen_ClaimRemainingNotActive() public {
         // Create new claim contract and don't start it
+        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        
         TECClaim implementation = new TECClaim();
         IERC20[] memory redeemableTokens = new IERC20[](2);
         redeemableTokens[0] = IERC20(address(dai));
@@ -350,7 +493,7 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
@@ -388,6 +531,9 @@ contract TECClaimTest is Test {
         token3.transfer(holder2, 300e18);
         token3.transfer(holder3, 300e18);
         
+        // Create new source token for this test
+        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        
         // Create new claim contract
         TECClaim implementation = new TECClaim();
         IERC20[] memory redeemableTokens = new IERC20[](3);
@@ -398,7 +544,7 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(tokenManager)),
+            IMiniMeToken(address(newSourceToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
@@ -447,8 +593,8 @@ contract TECClaimTest is Test {
     }
 
     function test_ClaimProportionalDistribution() public {
-        uint256 user1TecBalance = tecToken.balanceOf(user1);
-        uint256 tecTotalSupply = tecToken.totalSupply();
+        uint256 user1TecBalance = snapshotToken.balanceOf(user1);
+        uint256 tecTotalSupply = snapshotToken.totalSupply();
         
         // Calculate expected amounts
         uint256 expectedDai = (user1TecBalance * DAI_AMOUNT) / tecTotalSupply;
@@ -467,8 +613,8 @@ contract TECClaimTest is Test {
         assertEq(reth.balanceOf(user1), expectedReth);
         
         // Check TEC tokens were burned
-        assertEq(tecToken.balanceOf(user1), 0);
-        assertEq(tecToken.totalSupply(), tecTotalSupply - user1TecBalance);
+        assertEq(snapshotToken.balanceOf(user1), 0);
+        assertEq(snapshotToken.totalSupply(), tecTotalSupply - user1TecBalance);
     }
 
     function test_ClaimMultipleUsers() public {
@@ -494,8 +640,8 @@ contract TECClaimTest is Test {
         assertLt(reth.balanceOf(address(claim)), initialRethBalance);
 
         // Check TEC tokens were burned
-        assertEq(tecToken.balanceOf(user1), 0);
-        assertEq(tecToken.balanceOf(user2), 0);
+        assertEq(snapshotToken.balanceOf(user1), 0);
+        assertEq(snapshotToken.balanceOf(user2), 0);
     }
 
     function test_ClaimAllUsers() public {
@@ -513,7 +659,7 @@ contract TECClaimTest is Test {
         claim.claim();
 
         // Check all TEC tokens were burned
-        assertEq(tecToken.totalSupply(), 0);
+        assertEq(snapshotToken.totalSupply(), 0);
         
         // Check all redeemable tokens were distributed
         assertEq(dai.balanceOf(address(claim)), 0);
@@ -593,7 +739,7 @@ contract TECClaimTest is Test {
         vm.prank(user1);
         claim.claim();
 
-        assertEq(tecToken.balanceOf(user1), 0);
+        assertEq(snapshotToken.balanceOf(user1), 0);
         assertGt(dai.balanceOf(user1), 0);
     }
 
@@ -655,9 +801,8 @@ contract TECClaimTest is Test {
     }
 
     function test_ClaimWithSingleRedeemableToken() public {
-        // Create a new mock token and token manager for isolated test
-        MockTokenManager newTokenManager = new MockTokenManager(1_000_000e18);
-        MockERC20 newTecToken = MockERC20(newTokenManager.token());
+        // Create a new source token for isolated test
+        MockMiniMeToken newSourceTecToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
         
         // Create a new claim contract with only DAI
         TECClaim implementation = new TECClaim();
@@ -670,13 +815,16 @@ contract TECClaimTest is Test {
         bytes memory initData = abi.encodeWithSelector(
             TECClaim.initialize.selector,
             owner,
-            ITokenManager(address(newTokenManager)),
+            IMiniMeToken(address(newSourceTecToken)),
             redeemableTokens,
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
 
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), initData);
         TECClaim singleTokenClaim = TECClaim(address(proxy));
+        
+        // Get snapshot token created by the contract
+        MockMiniMeTokenClone newSnapshotToken = MockMiniMeTokenClone(address(singleTokenClaim.token()));
         
         // Transfer DAI to claim contract
         newDai.transfer(address(singleTokenClaim), 50_000e18);
@@ -685,20 +833,21 @@ contract TECClaimTest is Test {
         address[] memory emptyAddresses = new address[](0);
         singleTokenClaim.startClaim(emptyAddresses);
 
-        // Give user some TEC tokens
+        // Give user some snapshot tokens (simulate snapshot with balance)
         address testUser = address(0x888);
-        newTokenManager.transfer(testUser, 100_000e18);
+        newSourceTecToken.copyBalanceToClone(address(newSnapshotToken), owner);
+        newSnapshotToken.mint(testUser, 100_000e18);
 
         vm.prank(testUser);
         singleTokenClaim.claim();
 
         assertGt(newDai.balanceOf(testUser), 0);
-        assertEq(newTecToken.balanceOf(testUser), 0); // TEC tokens should be burned
+        assertEq(newSnapshotToken.balanceOf(testUser), 0); // Snapshot tokens should be burned
     }
 
     function test_ProportionalDistributionAccuracy() public {
-        uint256 user1TecBalance = tecToken.balanceOf(user1);
-        uint256 tecTotalSupply = tecToken.totalSupply();
+        uint256 user1TecBalance = snapshotToken.balanceOf(user1);
+        uint256 tecTotalSupply = snapshotToken.totalSupply();
         
         uint256 expectedDai = (user1TecBalance * DAI_AMOUNT) / tecTotalSupply;
         uint256 expectedReth = (user1TecBalance * RETH_AMOUNT) / tecTotalSupply;
@@ -712,7 +861,7 @@ contract TECClaimTest is Test {
     }
 
     function test_ClaimEmitsCorrectEvent() public {
-        uint256 user1Balance = tecToken.balanceOf(user1);
+        uint256 user1Balance = snapshotToken.balanceOf(user1);
 
         vm.expectEmit(true, false, false, true);
         emit Claim(user1, user1Balance);

@@ -4,15 +4,19 @@ import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
  * Deployment module for TECClaim contract (UUPS Upgradeable)
  * 
  * Configuration variables needed:
- * - TOKEN_MANAGER_ADDRESS: Address of the TokenManager contract
+ * - TEC_TOKEN_ADDRESS: Address of the source TEC MiniMe token (to create snapshot from)
  * - DAI_ADDRESS: Address of DAI token
  * - RETH_ADDRESS: Address of RETH token (or other redeemable tokens)
  * - CLAIM_DEADLINE: Unix timestamp for claim deadline (seconds)
  * - OWNER_ADDRESS: Address of the contract owner
+ * 
+ * Note: A non-transferable snapshot token will be automatically created during initialization
+ *       at the deployment block number. The TECClaim contract will be the controller of this
+ *       snapshot token.
  */
 export default buildModule("TECClaimModule", (m) => {
   // Get configuration parameters
-  const tokenManagerAddress = m.getParameter("tokenManagerAddress");
+  const tecTokenAddress = m.getParameter("tecTokenAddress");
   const daiAddress = m.getParameter("daiAddress");
   const rethAddress = m.getParameter("rethAddress");
   const claimDeadline = m.getParameter("claimDeadline");
@@ -29,7 +33,7 @@ export default buildModule("TECClaimModule", (m) => {
   // Encode the initialization data
   const initData = m.encodeFunctionCall(implementation, "initialize", [
     ownerAddress,
-    tokenManagerAddress,
+    tecTokenAddress,
     redeemableTokens,
     claimDeadline,
   ]);
