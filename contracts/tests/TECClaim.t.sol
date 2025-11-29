@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0
 pragma solidity ^0.8.28;
 
-import {TECClaim, IMiniMeToken, IERC20} from "./TECClaim.sol";
-import {TECClaimFactory} from "./TECClaimFactory.sol";
+import {TECClaim, IMiniMeToken, IERC20} from "../TECClaim.sol";
+import {TECClaimFactory} from "../TECClaimFactory.sol";
+import {MiniMeToken, MiniMeTokenFactory} from "./MiniMeToken.sol";
 import {Test, console2} from "forge-std/Test.sol";
 
 // Mock ERC20 Token (for DAI, RETH, etc.)
@@ -63,153 +64,12 @@ contract MockERC20 {
     }
 }
 
-// Mock MiniMe Token (simplified version for testing)
-contract MockMiniMeToken {
-    string public name;
-    string public symbol;
-    uint8 public decimals = 18;
-    uint256 public totalSupply;
-    mapping(address => uint256) public balanceOf;
-    address public controller;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event CloneTokenCreated(address indexed clone);
-
-    constructor(string memory _name, string memory _symbol, uint256 _totalSupply) {
-        name = _name;
-        symbol = _symbol;
-        totalSupply = _totalSupply;
-        balanceOf[msg.sender] = _totalSupply;
-        controller = msg.sender;
-        emit Transfer(address(0), msg.sender, _totalSupply);
-    }
-
-    function transfer(address to, uint256 amount) public returns (bool) {
-        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
-        emit Transfer(msg.sender, to, amount);
-        return true;
-    }
-
-    function destroyTokens(address _owner, uint256 _amount) external returns (bool) {
-        require(msg.sender == controller, "Only controller can destroy tokens");
-        require(balanceOf[_owner] >= _amount, "Insufficient balance");
-        balanceOf[_owner] -= _amount;
-        totalSupply -= _amount;
-        emit Transfer(_owner, address(0), _amount);
-        return true;
-    }
-
-    function createCloneToken(
-        string memory _cloneTokenName,
-        uint8 /* _cloneDecimalUnits */,
-        string memory _cloneTokenSymbol,
-        uint256 /* _snapshotBlock */,
-        bool /* _transfersEnabled */
-    ) external returns (IMiniMeToken) {
-        MockMiniMeTokenClone clone = new MockMiniMeTokenClone(
-            _cloneTokenName,
-            _cloneTokenSymbol,
-            address(this)
-        );
-        clone.setController(msg.sender);
-        
-        // Copy current totalSupply
-        clone.setTotalSupply(totalSupply);
-        
-        // Copy all existing balances to the clone
-        // This happens implicitly through the snapshot mechanism
-        // We use the parent field to track where balances come from
-        
-        emit CloneTokenCreated(address(clone));
-        return IMiniMeToken(address(clone));
-    }
-
-    function copyBalanceToClone(address clone, address holder) external {
-        MockMiniMeTokenClone(clone).mint(holder, balanceOf[holder]);
-    }
-}
-
-// Mock MiniMe Token Clone (simplified version for testing)
-contract MockMiniMeTokenClone {
-    string public name;
-    string public symbol;
-    uint8 public decimals = 18;
-    uint256 public totalSupply;
-    mapping(address => uint256) private _balanceOverrides;
-    mapping(address => bool) private _hasBalanceOverride;
-    address public controller;
-    address public parentToken;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-
-    constructor(string memory _name, string memory _symbol, address _parentToken) {
-        name = _name;
-        symbol = _symbol;
-        parentToken = _parentToken;
-    }
-
-    function setController(address _controller) external {
-        controller = _controller;
-    }
-
-    function setTotalSupply(uint256 _totalSupply) external {
-        totalSupply = _totalSupply;
-    }
-
-    function balanceOf(address _owner) public view returns (uint256) {
-        // If balance was overridden (burned or minted), use override
-        if (_hasBalanceOverride[_owner]) {
-            return _balanceOverrides[_owner];
-        }
-        // Otherwise, query parent token
-        if (parentToken != address(0)) {
-            return MockMiniMeToken(parentToken).balanceOf(_owner);
-        }
-        return 0;
-    }
-
-    function mint(address to, uint256 amount) external {
-        totalSupply += amount;
-        _balanceOverrides[to] = balanceOf(to) + amount;
-        _hasBalanceOverride[to] = true;
-        emit Transfer(address(0), to, amount);
-    }
-
-    function destroyTokens(address _owner, uint256 _amount) external returns (bool) {
-        require(msg.sender == controller, "Only controller can destroy tokens");
-        uint256 currentBalance = balanceOf(_owner);
-        require(currentBalance >= _amount, "Insufficient balance");
-        
-        _balanceOverrides[_owner] = currentBalance - _amount;
-        _hasBalanceOverride[_owner] = true;
-        totalSupply -= _amount;
-        
-        emit Transfer(_owner, address(0), _amount);
-        return true;
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        uint256 senderBalance = balanceOf(msg.sender);
-        require(senderBalance >= amount, "Insufficient balance");
-        
-        _balanceOverrides[msg.sender] = senderBalance - amount;
-        _hasBalanceOverride[msg.sender] = true;
-        
-        uint256 recipientBalance = balanceOf(to);
-        _balanceOverrides[to] = recipientBalance + amount;
-        _hasBalanceOverride[to] = true;
-        
-        emit Transfer(msg.sender, to, amount);
-        return true;
-    }
-}
 
 contract TECClaimTest is Test {
     TECClaim public claim;
-    MockMiniMeToken public sourceTecToken;      // Source token to create snapshot from
-    MockMiniMeTokenClone public snapshotToken;       // Snapshot token created by contract
+    MiniMeToken public sourceTecToken;      // Source token to create snapshot from
+    MiniMeToken public snapshotToken;       // Snapshot token created by contract
+    MiniMeTokenFactory public miniMeFactory; // Factory for creating MiniMe tokens
     MockERC20 public dai;
     MockERC20 public reth;
 
@@ -233,12 +93,22 @@ contract TECClaimTest is Test {
         dai = new MockERC20("DAI Stablecoin", "DAI", DAI_AMOUNT);
         reth = new MockERC20("Rocket Pool ETH", "RETH", RETH_AMOUNT);
         
+        // Create MiniMe factory
+        miniMeFactory = new MiniMeTokenFactory();
+        
         // Create source MiniMe token (original TEC token with balances)
-        sourceTecToken = new MockMiniMeToken(
+        sourceTecToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),  // No parent
+            0,                        // No parent snapshot block
             "Token Engineering Commons",
+            18,
             "TEC",
-            TEC_TOTAL_SUPPLY
+            true                      // Transfers enabled
         );
+        
+        // Generate initial supply in source token
+        sourceTecToken.generateTokens(address(this), TEC_TOTAL_SUPPLY);
         
         // Distribute TEC tokens to users in the SOURCE token
         // These balances will be snapshotted when the contract initializes
@@ -269,7 +139,7 @@ contract TECClaimTest is Test {
         
         // Get reference to the snapshot token that was created
         // The contract creates the snapshot and stores it in the token variable
-        snapshotToken = MockMiniMeTokenClone(address(claim.token()));
+        snapshotToken = MiniMeToken(payable(address(claim.token())));
 
         // Transfer redeemable tokens to claim contract
         dai.transfer(address(claim), DAI_AMOUNT);
@@ -290,11 +160,16 @@ contract TECClaimTest is Test {
 
     function test_InitialStateIsConfiguredBeforeStart() public {
         // Create a new source token and claim contract to check initial state
-        MockMiniMeToken newSourceToken = new MockMiniMeToken(
+        MiniMeToken newSourceToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
             "TEC",
+            18,
             "TEC",
-            TEC_TOTAL_SUPPLY
+            true
         );
+        newSourceToken.generateTokens(address(this), TEC_TOTAL_SUPPLY);
         
         TECClaim implementation = new TECClaim();
         TECClaimFactory factory = new TECClaimFactory(address(implementation));
@@ -331,11 +206,16 @@ contract TECClaimTest is Test {
         newReth.transfer(tokenHolder2, 5e18);
         
         // Create new source token for this test
-        MockMiniMeToken newSourceToken = new MockMiniMeToken(
+        MiniMeToken newSourceToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
             "TEC",
+            18,
             "TEC",
-            1_000_000e18
+            true
         );
+        newSourceToken.generateTokens(address(this), 1_000_000e18);
         
         // Create new claim contract for this test
         TECClaim implementation = new TECClaim();
@@ -400,7 +280,16 @@ contract TECClaimTest is Test {
         MockERC20 newDai = new MockERC20("DAI", "DAI", 50_000e18);
         newDai.transfer(tokenHolder, 50_000e18);
         
-        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        MiniMeToken newSourceToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
+            "TEC",
+            18,
+            "TEC",
+            true
+        );
+        newSourceToken.generateTokens(address(this), 1_000_000e18);
         
         TECClaim implementation = new TECClaim();
         TECClaimFactory factory = new TECClaimFactory(address(implementation));
@@ -433,7 +322,16 @@ contract TECClaimTest is Test {
 
     function test_RevertWhen_ClaimBeforeActive() public {
         // Create a new claim contract that hasn't been started
-        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        MiniMeToken newSourceToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
+            "TEC",
+            18,
+            "TEC",
+            true
+        );
+        newSourceToken.generateTokens(address(this), 1_000_000e18);
         
         TECClaim implementation = new TECClaim();
         TECClaimFactory factory = new TECClaimFactory(address(implementation));
@@ -479,7 +377,16 @@ contract TECClaimTest is Test {
 
     function test_RevertWhen_ClaimRemainingNotActive() public {
         // Create new claim contract and don't start it
-        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        MiniMeToken newSourceToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
+            "TEC",
+            18,
+            "TEC",
+            true
+        );
+        newSourceToken.generateTokens(address(this), 1_000_000e18);
         
         TECClaim implementation = new TECClaim();
         TECClaimFactory factory = new TECClaimFactory(address(implementation));
@@ -527,7 +434,16 @@ contract TECClaimTest is Test {
         token3.transfer(holder3, 300e18);
         
         // Create new source token for this test
-        MockMiniMeToken newSourceToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        MiniMeToken newSourceToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
+            "TEC",
+            18,
+            "TEC",
+            true
+        );
+        newSourceToken.generateTokens(address(this), 1_000_000e18);
         
         // Create new claim contract
         TECClaim implementation = new TECClaim();
@@ -796,7 +712,16 @@ contract TECClaimTest is Test {
 
     function test_ClaimWithSingleRedeemableToken() public {
         // Create a new source token for isolated test
-        MockMiniMeToken newSourceTecToken = new MockMiniMeToken("TEC", "TEC", 1_000_000e18);
+        MiniMeToken newSourceTecToken = new MiniMeToken(
+            miniMeFactory,
+            MiniMeToken(payable(address(0))),
+            0,
+            "TEC",
+            18,
+            "TEC",
+            true
+        );
+        newSourceTecToken.generateTokens(address(this), 1_000_000e18);
         
         // Create a new claim contract with only DAI
         TECClaim implementation = new TECClaim();
@@ -817,7 +742,7 @@ contract TECClaimTest is Test {
         TECClaim singleTokenClaim = TECClaim(proxyAddress);
         
         // Get snapshot token created by the contract
-        MockMiniMeTokenClone newSnapshotToken = MockMiniMeTokenClone(address(singleTokenClaim.token()));
+        MiniMeToken newSnapshotToken = MiniMeToken(payable(address(singleTokenClaim.token())));
         
         // Transfer DAI to claim contract
         newDai.transfer(address(singleTokenClaim), 50_000e18);
@@ -828,8 +753,9 @@ contract TECClaimTest is Test {
 
         // Give user some snapshot tokens (simulate snapshot with balance)
         address testUser = address(0x888);
-        newSourceTecToken.copyBalanceToClone(address(newSnapshotToken), owner);
-        newSnapshotToken.mint(testUser, 100_000e18);
+        // The snapshot was taken at clone creation, so we need to use generateTokens
+        vm.prank(address(singleTokenClaim));
+        newSnapshotToken.generateTokens(testUser, 100_000e18);
 
         vm.prank(testUser);
         singleTokenClaim.claim();
