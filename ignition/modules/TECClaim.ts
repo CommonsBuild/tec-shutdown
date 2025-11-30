@@ -63,11 +63,6 @@ export default buildModule("TECClaimModule", (m) => {
     id: "TECClaim",
   });
 
-  // Create the snapshot token (new two-step process)
-  m.call(tecClaim, "createSnapshotToken", [], {
-    id: "TECClaim_CreateSnapshot",
-  });
-
   return { 
     implementation, 
     factory,
