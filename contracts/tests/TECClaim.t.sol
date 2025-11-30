@@ -128,7 +128,7 @@ contract TECClaimTest is Test {
         redeemableTokens[0] = IERC20(address(dai));
         redeemableTokens[1] = IERC20(address(reth));
 
-        // Create proxy using factory (this creates the snapshot)
+        // Create proxy using factory
         address proxyAddress = factory.create(
             owner,
             IMiniMeToken(address(sourceTecToken)),
@@ -137,8 +137,10 @@ contract TECClaimTest is Test {
         );
         claim = TECClaim(proxyAddress);
         
+        // Create the snapshot token (new two-step process)
+        claim.createSnapshotToken();
+        
         // Get reference to the snapshot token that was created
-        // The contract creates the snapshot and stores it in the token variable
         snapshotToken = MiniMeToken(payable(address(claim.token())));
 
         // Transfer redeemable tokens to claim contract
@@ -188,6 +190,9 @@ contract TECClaimTest is Test {
         
         // After initialization, state should be configured
         assertEq(uint8(newClaim.state()), 1); // State.configured
+        
+        // Create snapshot token for this test
+        newClaim.createSnapshotToken();
     }
 
     function test_StartClaimTransitionsToActive() public {
@@ -232,6 +237,9 @@ contract TECClaimTest is Test {
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
         TECClaim newClaim = TECClaim(proxyAddress);
+        
+        // Create snapshot token
+        newClaim.createSnapshotToken();
         
         // Approve tokens for transfer
         vm.prank(tokenHolder1);
@@ -305,6 +313,9 @@ contract TECClaimTest is Test {
         );
         TECClaim newClaim = TECClaim(proxyAddress);
         
+        // Create snapshot token
+        newClaim.createSnapshotToken();
+        
         vm.prank(tokenHolder);
         newDai.approve(address(newClaim), type(uint256).max);
         
@@ -347,6 +358,9 @@ contract TECClaimTest is Test {
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
         TECClaim newClaim = TECClaim(proxyAddress);
+        
+        // Create snapshot token
+        newClaim.createSnapshotToken();
         
         // State should be configured
         assertEq(uint8(newClaim.state()), 1);
@@ -402,6 +416,9 @@ contract TECClaimTest is Test {
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
         TECClaim newClaim = TECClaim(proxyAddress);
+        
+        // Create snapshot token
+        newClaim.createSnapshotToken();
         
         // Fast forward past deadline
         vm.warp(block.timestamp + CLAIM_DEADLINE + 1);
@@ -461,6 +478,9 @@ contract TECClaimTest is Test {
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
         TECClaim newClaim = TECClaim(proxyAddress);
+        
+        // Create snapshot token
+        newClaim.createSnapshotToken();
         
         // Approve all tokens
         vm.prank(holder1);
@@ -740,6 +760,9 @@ contract TECClaimTest is Test {
             uint64(block.timestamp + CLAIM_DEADLINE)
         );
         TECClaim singleTokenClaim = TECClaim(proxyAddress);
+        
+        // Create snapshot token
+        singleTokenClaim.createSnapshotToken();
         
         // Get snapshot token created by the contract
         MiniMeToken newSnapshotToken = MiniMeToken(payable(address(singleTokenClaim.token())));

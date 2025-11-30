@@ -6,11 +6,13 @@ This project contains the TECClaim smart contract, an upgradeable contract that 
 
 The TECClaim contract enables TEC token holders to burn their snapshot tokens in exchange for a proportional share of redeemable tokens (DAI, RETH, etc.) held in the contract. The contract uses the UUPS upgradeable proxy pattern and includes features for address blocking and owner withdrawal after a deadline.
 
-The contract uses a **non-transferable snapshot** of the TEC token, created at deployment time using MiniMe's `createCloneToken` functionality. This snapshot is frozen at a specific block height and cannot be transferred, making it perfect for claim tracking.
+The contract uses a **non-transferable snapshot** of the TEC token, created as a separate step after initialization using MiniMe's `createCloneToken` functionality. This snapshot is frozen at a specific block height and cannot be transferred, making it perfect for claim tracking.
 
 ### Key Features
 
-- **Non-Transferable Snapshot**: Creates a frozen snapshot of TEC token balances at deployment
+- **Non-Transferable Snapshot**: Creates a frozen snapshot of TEC token balances at a specific block
+- **Flexible Snapshot Timing**: Owner can create the snapshot at the optimal moment via `createSnapshotToken()`
+- **Snapshot Adjustment**: Owner can burn specific addresses' snapshot tokens before activation via `burn()`
 - **Proportional Claims**: Users can claim their proportional share of treasury assets based on their snapshot token holdings
 - **Token Burning**: Snapshot tokens are burned upon claiming to prevent double-claims
 - **MiniMe Token Integration**: Uses MiniMe's clone token functionality for secure snapshots
@@ -25,7 +27,10 @@ The contract uses a **non-transferable snapshot** of the TEC token, created at d
 
 The main contract that handles the token claiming logic:
 
-- `claim()` - Burns user's TEC tokens and transfers proportional share of redeemable tokens
+- `createSnapshotToken()` - Creates a snapshot of the parent token (owner only, must be called after initialization)
+- `burn()` - Burns specific addresses' snapshot tokens before activation (owner only)
+- `startClaim()` - Activates the claim period (owner only)
+- `claim()` - Burns user's snapshot tokens and transfers proportional share of redeemable tokens
 - `claimRemaining()` - Owner can claim remaining tokens after deadline (owner only)
 - `blockAddresses()` - Block addresses from claiming (owner only)
 - `unblockAddresses()` - Unblock previously blocked addresses (owner only)
@@ -122,8 +127,10 @@ To deploy the TECClaim contract, you'll need to:
 1. Deploy the implementation contract (TECClaim)
 2. Deploy the factory contract (TECClaimFactory) with the implementation address
 3. Use the factory to create a proxy with initialization parameters
-4. Transfer redeemable tokens (DAI, RETH, etc.) to the proxy address
-5. Call `startClaim()` to activate claiming
+4. Call `createSnapshotToken()` to create the snapshot token at the current block
+5. (Optional) Call `burn()` to adjust specific addresses' balances if needed
+6. Transfer redeemable tokens (DAI, RETH, etc.) to the proxy address
+7. Call `startClaim()` to activate claiming
 
 Example deployment flow is demonstrated in the ignition module and test suite setup.
 

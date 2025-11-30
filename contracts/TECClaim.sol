@@ -30,6 +30,7 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
   using SafeERC20 for IERC20;
 
     State public state;
+    IMiniMeToken public parentToken;
     IMiniMeToken public token;
     uint64 public claimDeadline;
     IERC20[] public redeemableTokens;
@@ -62,10 +63,17 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     ) public initializer {
         __Ownable_init(initialOwner);
         __UUPSUpgradeable_init();
-        token = _token.createCloneToken("TEC Shutdown Snapshot", 18, "TECSNAP", block.number, false);
+        parentToken = _token;
         redeemableTokens = _redeemableTokens;
         claimDeadline = _claimDeadline;
         state = State.configured;
+    }
+
+    function createSnapshotToken() external onlyOwner {
+        if (state != State.configured) {
+            revert ErrorAlreadyActive();
+        }
+        token = parentToken.createCloneToken("TEC Shutdown Snapshot", 18, "TECSNAP", block.number, false);
     }
 
     function burn(address _owner, uint256 _amount) external onlyOwner {
@@ -77,7 +85,7 @@ contract TECClaim is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     }
 
     function startClaim(address[] calldata from) external onlyOwner {
-        if (state != State.configured) {
+        if (address(token) == address(0) || state != State.configured) {
             revert ErrorNotConfigured();
         }
 

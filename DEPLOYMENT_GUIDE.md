@@ -55,9 +55,10 @@ The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** p
 ┌─────────────────────────────────────┐
 │   Non-Transferable Snapshot Token   │
 │  - Created via createCloneToken()    │
-│  - Frozen at deployment block        │
+│  - Frozen at snapshot block          │
 │  - Transfers disabled                │
 │  - TECClaim is controller            │
+│  - Created after proxy initialization│
 └─────────────────────────────────────┘
 ```
 
@@ -68,8 +69,9 @@ The TECClaim contract uses the **UUPS (Universal Upgradeable Proxy Standard)** p
 - Owner can upgrade to new Implementation via UUPS pattern
 - The Implementation address can change, but Proxy address stays constant
 - **TECClaimFactory simplifies proxy creation** by encapsulating initialization
-- **A non-transferable snapshot is automatically created on deployment** from the source TEC token
-- The snapshot is frozen at the deployment block number
+- **A non-transferable snapshot is created via `createSnapshotToken()`** after initialization
+- The snapshot is frozen at the block when `createSnapshotToken()` is called
+- Owner can adjust snapshot balances with `burn()` before activating claims
 
 ## Contract State Machine
 
@@ -84,9 +86,15 @@ The TECClaim contract uses a state machine to manage the claim lifecycle:
 ┌────────────┐
 │ configured │  After initialize() is called
 └──────────┬─┘  - Contract is set up with parameters
-           │    - Snapshot token created (non-transferable)
+           │    - Parent token reference stored
            │    - Redeemable tokens configured
+           │    - Snapshot token NOT yet created
            │    - Cannot claim yet
+           │
+           │ createSnapshotToken() called by owner
+           │ (creates non-transferable snapshot at current block)
+           │
+           │ [Optional: burn() to adjust specific balances]
            │
            │ startClaim() called by owner
            │ (transfers tokens to contract)
@@ -107,9 +115,10 @@ The TECClaim contract uses a state machine to manage the claim lifecycle:
 ```
 
 **State Transitions:**
-1. **dormant → configured**: Happens during `initialize()` (deployment) - automatically creates snapshot token
-2. **configured → active**: Owner calls `startClaim()` to transfer redeemable tokens and enable claiming
-3. **active → finialized**: Owner calls `claimRemaining()` after deadline to collect unclaimed tokens
+1. **dormant → configured**: Happens during `initialize()` (deployment)
+2. **Within configured**: Owner calls `createSnapshotToken()` to create the snapshot, optionally calls `burn()` to adjust balances
+3. **configured → active**: Owner calls `startClaim()` to transfer redeemable tokens and enable claiming
+4. **active → finialized**: Owner calls `claimRemaining()` after deadline to collect unclaimed tokens
 
 **Important**: The `startClaim()` function must be called by the owner after deployment to activate claiming. This allows the owner to coordinate the transfer of redeemable tokens from multiple sources before users can start claiming.
 
@@ -146,8 +155,8 @@ Edit `ignition/parameters/local.json` with your deployment parameters. Example:
 
 **Important Notes:**
 - `tecTokenAddress`: The source MiniMe token address to create a snapshot from
-- A non-transferable snapshot will be automatically created at deployment
-- The snapshot will be frozen at the current block number
+- A non-transferable snapshot will be created when `createSnapshotToken()` is called
+- The snapshot will be frozen at the block when `createSnapshotToken()` is called
 
 ### Step 3: Compile Contracts
 
@@ -184,6 +193,9 @@ Batch #3
   Executed TECClaimModule#TECClaim_Proxy_Creation
 
 Batch #4
+  Executed TECClaimModule#TECClaim_CreateSnapshot
+
+Batch #5
   Executed TECClaimModule#TECClaim
 
 [ TECClaimModule ] successfully deployed 🚀
@@ -196,7 +208,20 @@ TECClaimModule#TECClaim_Proxy_Creation - 0x... (proxy address)
 TECClaimModule#TECClaim - 0x... (proxy address)
 ```
 
-### Step 5: Fund the Contract and Start Claiming
+### Step 5: Optionally Adjust Snapshot Balances
+
+If you need to burn specific addresses' snapshot tokens before activation (e.g., to exclude certain accounts):
+
+```bash
+# Using cast (Foundry)
+cast send $PROXY_ADDRESS "burn(address,uint256)" $ADDRESS_TO_BURN $AMOUNT \
+  --rpc-url http://127.0.0.1:8545 \
+  --private-key $OWNER_KEY
+```
+
+This step is optional and should only be done if needed before activating claims.
+
+### Step 6: Fund the Contract and Start Claiming
 
 After deployment, the contract is in the `configured` state. You need to transfer redeemable tokens and activate claiming:
 
@@ -380,9 +405,11 @@ cast call $PROXY_ADDRESS "state()(uint8)" --rpc-url $OPTIMISM_RPC
    - Deploy and test on local forked network
    - Test all claim scenarios
    - Test state transitions (configured → active → finialized)
+   - Test `createSnapshotToken()` function
+   - Test `burn()` function for snapshot adjustments
    - Test `startClaim()` function with various scenarios
-   - Test snapshot token creation
-   - Verify blocklist functionality
+   - Verify snapshot token creation timing
+   - Test blocklist functionality
    - Test owner functions
    - Confirm deadline mechanism works
    - Test claiming before `startClaim()` is called (should revert)
@@ -414,12 +441,14 @@ cast call $PROXY_ADDRESS "state()(uint8)" --rpc-url $OPTIMISM_RPC
 3. Save deployment addresses (especially proxy address)
 4. Verify on Optimistic Etherscan: `npx hardhat ignition verify <deployment-id>`
 5. Verify contract is in `configured` state (state should be 1)
-6. **Set TECClaim as controller of TEC token** (from current controller address)
-7. Transfer redeemable tokens to proxy address OR prepare approval if using `startClaim()` to pull tokens
-8. **Call `startClaim()` from owner address to activate claiming**
-9. Verify contract is in `active` state (state should be 2)
-10. Verify TECClaim is the controller of the TEC token
-11. Test with small claim (if possible)
+6. **Verify snapshot token was created** (`token()` should return non-zero address)
+7. **(Optional) Call `burn()` to adjust specific addresses' snapshot balances if needed**
+8. **Set TECClaim as controller of the snapshot token** (already done automatically by `createSnapshotToken()`)
+9. Transfer redeemable tokens to proxy address OR prepare approval if using `startClaim()` to pull tokens
+10. **Call `startClaim()` from owner address to activate claiming**
+11. Verify contract is in `active` state (state should be 2)
+12. Verify TECClaim is the controller of the snapshot token
+13. Test with small claim (if possible)
 
 ## Post-Deployment Checklist
 
@@ -428,10 +457,11 @@ After deployment, verify:
 - [ ] Contract is verified on Optimistic Etherscan
 - [ ] Owner address is correct (`owner()` view function)
 - [ ] Claim deadline is set correctly (`claimDeadline()` view function)
-- [ ] Source TEC Token address is correct
-- [ ] Snapshot token was created successfully at deployment
+- [ ] Source TEC Token address is correct (`parentToken()` view function)
+- [ ] Snapshot token was created successfully (`token()` returns non-zero address)
+- [ ] Snapshot token is non-transferable (verify `transfersEnabled()` returns false on snapshot)
 - [ ] Redeemable tokens array is correct
-- [ ] Contract state is `configured` (1) immediately after deployment
+- [ ] Contract state is `configured` (1) after deployment and snapshot creation
 - [ ] All redeemable tokens are transferred to proxy contract
 - [ ] **`startClaim()` has been called by owner**
 - [ ] **Contract state is now `active` (2)**
@@ -444,6 +474,29 @@ After deployment, verify:
 ## Contract Functions Reference
 
 ### State Management Functions
+
+**`createSnapshotToken()`** - Owner only
+- **Purpose**: Creates a non-transferable snapshot of the parent TEC token
+- **When to use**: After deployment, before activating claims
+- **Requirements**:
+  - Must be called by owner
+  - Contract must be in `configured` state
+  - Can only be called once (snapshot creation is permanent)
+- **Effects**: Creates a MiniMe clone token with transfers disabled, frozen at current block
+- **State**: Remains in `configured` state after execution
+
+**`burn(address _owner, uint256 _amount)`** - Owner only
+- **Purpose**: Burns snapshot tokens from a specific address before activation
+- **When to use**: After creating snapshot but before calling `startClaim()`, if you need to exclude or adjust balances
+- **Parameters**:
+  - `_owner`: Address to burn tokens from
+  - `_amount`: Amount of snapshot tokens to burn
+- **Requirements**:
+  - Must be called by owner
+  - Contract must be in `configured` state
+  - Snapshot token must already exist (call `createSnapshotToken()` first)
+- **Effects**: Reduces the snapshot token balance of the specified address
+- **State**: Remains in `configured` state after execution
 
 **`startClaim(address[] from)`** - Owner only
 - **Purpose**: Activates the claim contract by transitioning from `configured` to `active` state

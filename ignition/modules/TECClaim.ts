@@ -10,9 +10,12 @@ import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
  * - CLAIM_DEADLINE: Unix timestamp for claim deadline (seconds)
  * - OWNER_ADDRESS: Address of the contract owner
  * 
- * Note: A non-transferable snapshot token will be automatically created during initialization
- *       at the deployment block number. The TECClaim contract will be the controller of this
- *       snapshot token.
+ * Note: The deployment process consists of:
+ *       1. Deploy the implementation contract
+ *       2. Deploy the factory contract
+ *       3. Create a proxy via the factory
+ *       4. Create a non-transferable snapshot token at the current block
+ *       The TECClaim contract will be the controller of the snapshot token.
  */
 export default buildModule("TECClaimModule", (m) => {
   // Get configuration parameters
@@ -58,6 +61,11 @@ export default buildModule("TECClaimModule", (m) => {
   // Create a contract instance at the proxy address with the implementation ABI
   const tecClaim = m.contractAt("TECClaim", proxyAddress, {
     id: "TECClaim",
+  });
+
+  // Create the snapshot token (new two-step process)
+  m.call(tecClaim, "createSnapshotToken", [], {
+    id: "TECClaim_CreateSnapshot",
   });
 
   return { 
