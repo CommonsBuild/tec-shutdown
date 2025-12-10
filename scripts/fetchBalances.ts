@@ -31,7 +31,7 @@ const BALANCEOF_AT_ABI = [
 ] as const;
 
 const BLOCK_BEFORE = 138850000n;
-const BLOCK_AFTER = 144200000n;
+const BLOCK_AFTER = 144895034n;
 
 async function main() {
   console.log('🔗 Connecting to Optimism mainnet...');
@@ -59,15 +59,19 @@ async function main() {
   const csvContent = readFileSync('tec_transfers.csv', 'utf-8');
   const lines = csvContent.split('\n').slice(1); // Skip header
   
-  // Extract unique addresses
+  // Extract unique addresses (both from and to)
   const uniqueAddresses = new Set<string>();
   for (const line of lines) {
     if (!line.trim()) continue;
     const parts = line.split(',');
-    if (parts.length >= 2) {
-      const address = parts[1].trim();
-      if (address && address.startsWith('0x')) {
-        uniqueAddresses.add(address);
+    if (parts.length >= 3) {
+      const fromAddress = parts[1].trim();
+      const toAddress = parts[2].trim();
+      if (fromAddress && fromAddress.startsWith('0x')) {
+        uniqueAddresses.add(fromAddress);
+      }
+      if (toAddress && toAddress.startsWith('0x')) {
+        uniqueAddresses.add(toAddress);
       }
     }
   }

@@ -6,6 +6,7 @@ function main() {
   const lines = csvContent.split('\n').slice(1); // Skip header
 
   const burnCommands: string[] = [];
+  let totalBurned = 0n;
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -17,20 +18,24 @@ function main() {
 
     // Only process if diff is not 0
     if (diff !== '0' && diff !== '') {
-      burnCommands.push(`exec $spender burn(address,uint) ${address} ${diff} --from $giveth`);
+      burnCommands.push(`exec $spender burn(address,uint) ${address} ${diff}`);
+      totalBurned += BigInt(diff);
     }
   }
 
   console.log(`✨ Found ${burnCommands.length} addresses with non-zero diff`);
 
   // Write to output file
-  const outputContent = burnCommands.join('\n') + '\n';
-  const filename = 'burn_commands.txt';
+  const outputContent = 'set $spender 0x873f0EFeA1a72B2a5ff6ef755fF5Cbf80A324D43\n' + burnCommands.join('\n') + '\n';
+  const filename = 'tec_burn_commands.txt';
 
   writeFileSync(filename, outputContent);
 
   console.log(`\n✅ Done! Saved ${burnCommands.length} burn commands to ${filename}`);
+  console.log(`🔥 Total TEC to burn: ${(Number(totalBurned) / 1e18).toFixed(4)} TEC`);
 }
 
 main();
+
+
 

@@ -37,9 +37,11 @@ async function main() {
 
   console.log(`✅ TEC Token address: ${tecTokenAddress}`);
 
-  // Get the current block number
-  const currentBlock = await client.getBlockNumber();
-  console.log(`📦 Current block: ${currentBlock}`);
+  // Block range to fetch transfers from
+  const BLOCK_BEFORE = 138850000n;
+  const BLOCK_AFTER = 144895034n;
+  
+  console.log(`📦 Fetching transfers from block ${BLOCK_BEFORE} to ${BLOCK_AFTER}`);
 
   // Fetch all Transfer events
   // Transfer event signature: Transfer(address indexed from, address indexed to, uint256 value)
@@ -49,14 +51,13 @@ async function main() {
   
   // We'll fetch in chunks to avoid RPC limits
   const CHUNK_SIZE = 10000n;
-  const startBlock = 113694150n; // TEC token deployment block
   
   let allTransfers: any[] = [];
-  let currentChunkStart = startBlock;
+  let currentChunkStart = BLOCK_BEFORE;
   
-  while (currentChunkStart < currentBlock) {
-    const toBlock = currentChunkStart + CHUNK_SIZE > currentBlock 
-      ? currentBlock 
+  while (currentChunkStart < BLOCK_AFTER) {
+    const toBlock = currentChunkStart + CHUNK_SIZE > BLOCK_AFTER 
+      ? BLOCK_AFTER 
       : currentChunkStart + CHUNK_SIZE;
     
     console.log(`  Fetching blocks ${currentChunkStart} to ${toBlock}...`);
@@ -85,14 +86,15 @@ async function main() {
 
   console.log(`\n✨ Total transfers found: ${allTransfers.length}`);
 
-  // Create CSV with transaction hash and to address
+  // Create CSV with transaction hash, from address, and to address
   console.log('📝 Creating CSV file...');
   
-  const csvLines = ['transaction_hash,to_address'];
+  const csvLines = ['transaction_hash,from_address,to_address'];
   
   for (const transfer of allTransfers) {
+    const fromAddress = transfer.args?.from || '';
     const toAddress = transfer.args?.to || '';
-    csvLines.push(`${transfer.transactionHash},${toAddress}`);
+    csvLines.push(`${transfer.transactionHash},${fromAddress},${toAddress}`);
   }
   
   const csvContent = csvLines.join('\n');
