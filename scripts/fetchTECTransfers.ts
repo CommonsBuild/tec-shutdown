@@ -50,17 +50,21 @@ async function main() {
   const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
   
   // We'll fetch in chunks to avoid RPC limits
-  const CHUNK_SIZE = 10000n;
+  // Common RPC log limits: 10000 (Alchemy), 10000 (Infura), varies by provider
+  const RPC_LOG_LIMIT = 10000;
+  const MIN_CHUNK_SIZE = 100n;
+  const INITIAL_CHUNK_SIZE = 10000n;
   
   let allTransfers: any[] = [];
   let currentChunkStart = BLOCK_BEFORE;
+  let chunkSize = INITIAL_CHUNK_SIZE;
   
-  while (currentChunkStart < BLOCK_AFTER) {
-    const toBlock = currentChunkStart + CHUNK_SIZE > BLOCK_AFTER 
+  while (currentChunkStart <= BLOCK_AFTER) {
+    const toBlock = currentChunkStart + chunkSize > BLOCK_AFTER 
       ? BLOCK_AFTER 
-      : currentChunkStart + CHUNK_SIZE;
+      : currentChunkStart + chunkSize;
     
-    console.log(`  Fetching blocks ${currentChunkStart} to ${toBlock}...`);
+    console.log(`  Fetching blocks ${currentChunkStart} to ${toBlock} (chunk size: ${chunkSize})...`);
     
     try {
       const logs = await client.getLogs({
@@ -70,14 +74,42 @@ async function main() {
         toBlock: toBlock,
       });
       
+      // Check for potential truncation: if we hit exactly the RPC limit,
+      // the response was likely truncated
+      if (logs.length >= RPC_LOG_LIMIT) {
+        console.log(`  ⚠️  Got ${logs.length} logs (at RPC limit) - likely truncated!`);
+        
+        if (chunkSize > MIN_CHUNK_SIZE) {
+          // Reduce chunk size and retry this range
+          chunkSize = chunkSize / 2n;
+          console.log(`  Reducing chunk size to ${chunkSize} and retrying...`);
+          continue;
+        } else {
+          // Can't reduce further - warn but continue
+          console.warn(`  ⚠️  WARNING: Chunk size at minimum but still hitting limit!`);
+          console.warn(`  ⚠️  Blocks ${currentChunkStart}-${toBlock} may have missing transfers!`);
+        }
+      }
+      
       allTransfers = allTransfers.concat(logs);
       console.log(`  Found ${logs.length} transfers (total so far: ${allTransfers.length})`);
+      
+      // Successful fetch - try to gradually increase chunk size for efficiency
+      if (logs.length < RPC_LOG_LIMIT / 2 && chunkSize < INITIAL_CHUNK_SIZE) {
+        chunkSize = chunkSize * 2n > INITIAL_CHUNK_SIZE ? INITIAL_CHUNK_SIZE : chunkSize * 2n;
+      }
+      
     } catch (error) {
       console.error(`  Error fetching blocks ${currentChunkStart}-${toBlock}:`, error);
-      // Try with smaller chunk size if we hit rate limits
-      if (CHUNK_SIZE > 1000n) {
-        console.log('  Retrying with smaller chunk size...');
+      
+      if (chunkSize > MIN_CHUNK_SIZE) {
+        // Reduce chunk size and retry
+        chunkSize = chunkSize / 2n;
+        console.log(`  Reducing chunk size to ${chunkSize} and retrying...`);
         continue;
+      } else {
+        // Can't reduce further - this is a real problem
+        throw new Error(`Failed to fetch blocks ${currentChunkStart}-${toBlock} even with minimum chunk size`);
       }
     }
     
